@@ -1,35 +1,43 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { useEffect, useState } from "react";
+import { io } from "socket.io-client";
+import Board from "./components/Board"; // Naya component import kiya
+
+const socket = io("http://localhost:5000");
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [status, setStatus] = useState("Connecting...");
+
+  useEffect(() => {
+    if (socket.connected) {
+      setStatus(`Connected successfully! Your ID: ${socket.id}`);
+    }
+
+    const onConnect = () => setStatus(`Connected successfully! Your ID: ${socket.id}`);
+    const onDisconnect = () => setStatus("Disconnected from server...");
+
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+
+    return () => {
+      socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
+    };
+  }, []);
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+      <div style={{ textAlign: "center", marginBottom: "10px" }}>
+        <h1 style={{ margin: "10px 0" }}>Real-Time Collaborative Whiteboard</h1>
+        <p style={{ color: status.includes("Connected") ? "green" : "red", margin: 0 }}>
+          {status}
         </p>
       </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+      
+      {/* Yahan humara drawing board aayega */}
+      // App.jsx me sirf ye ek line change karni hai
+    <Board socket={socket} />
+    </div>
+  );
 }
 
-export default App
+export default App;
