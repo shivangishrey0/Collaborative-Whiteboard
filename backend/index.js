@@ -22,6 +22,8 @@ const io = new Server(server, {
 io.on("connection", (socket) => {
   console.log(`User Connected: ${socket.id}`);
 
+  io.emit("user-count", io.engine.clientsCount);
+
   // 1. Jab koi user drawing shuru kare
   socket.on("start-draw", (data) => {
     socket.broadcast.emit("start-draw", data); // Dusro ko bhejo
@@ -44,6 +46,7 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     console.log(`User Disconnected: ${socket.id}`);
+    io.emit("user-count", io.engine.clientsCount);
   });
 });
 
