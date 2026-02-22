@@ -37,6 +37,11 @@ io.on("connection", (socket) => {
     socket.broadcast.emit("stop-draw"); // Dusro ko bhejo
   });
 
+ socket.on("clear", () => {
+    // io.emit sabko message bhejta hai (jisne bheja usko bhi!)
+    io.emit("clear"); 
+  });
+
   socket.on("disconnect", () => {
     console.log(`User Disconnected: ${socket.id}`);
   });
