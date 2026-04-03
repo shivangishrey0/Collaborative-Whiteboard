@@ -12,6 +12,7 @@ function App() {
   const [roomId, setRoomId] = useState("");
   const [roomInput, setRoomInput] = useState("");
   const [roomLink, setRoomLink] = useState("");
+  const [roomExpiresAt, setRoomExpiresAt] = useState("");
   const [isRoomLoading, setIsRoomLoading] = useState(false);
 
   const [color, setColor] = useState("#000000");
@@ -74,6 +75,7 @@ function App() {
       setRoomId(data.roomId);
       setRoomInput(data.roomId);
       setRoomLink(data.roomLink);
+      setRoomExpiresAt(data.expiresAt || "");
 
       const nextUrl = `${window.location.origin}/?room=${data.roomId}`;
       window.history.replaceState({}, "", nextUrl);
@@ -97,7 +99,10 @@ function App() {
         throw new Error("Room not found. Check room link/ID.");
       }
 
+      const data = await response.json();
+
       setRoomId(roomInput.trim());
+      setRoomExpiresAt(data.expiresAt || "");
       const nextUrl = `${window.location.origin}/?room=${roomInput.trim()}`;
       window.history.replaceState({}, "", nextUrl);
       setStatus(`Joining room ${roomInput.trim()}...`);
@@ -116,6 +121,15 @@ function App() {
     } catch {
       setStatus("Unable to copy automatically. Copy from browser URL.");
     }
+  };
+
+  const formatExpiryLabel = (expiresAt) => {
+    if (!expiresAt) return "";
+
+    const expiryDate = new Date(expiresAt);
+    if (Number.isNaN(expiryDate.getTime())) return "";
+
+    return expiryDate.toLocaleString();
   };
 
   return (
@@ -167,6 +181,12 @@ function App() {
           <div style={{ fontWeight: "bold", color: "#333", backgroundColor: "#e0e0e0", padding: "5px 10px", borderRadius: "5px" }}>
             👤 Room Users: {userCount}
           </div>
+
+          {roomExpiresAt && (
+            <div style={{ fontWeight: "bold", color: "#333", backgroundColor: "#e6f4ea", padding: "5px 10px", borderRadius: "5px" }}>
+              ⏳ Expires: {formatExpiryLabel(roomExpiresAt)}
+            </div>
+          )}
 
           {/* Sheet Background Selector */}
           <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>

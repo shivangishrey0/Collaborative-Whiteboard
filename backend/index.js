@@ -30,6 +30,8 @@ const createRoomId = () => crypto.randomBytes(12).toString("hex");
 
 const getRoomUserCount = (roomId) => io.sockets.adapter.rooms.get(roomId)?.size || 0;
 
+const isRoomExpired = (room) => Boolean(room?.expiresAt && new Date(room.expiresAt).getTime() <= Date.now());
+
 app.get("/health", (req, res) => {
   res.json({ ok: true, service: "whiteboard-backend" });
 });
@@ -49,6 +51,7 @@ app.post("/api/rooms", async (req, res) => {
     return res.status(201).json({
       roomId: room.roomId,
       roomLink: `${FRONTEND_URL}/?room=${room.roomId}`,
+      expiresAt: room.expiresAt,
     });
   } catch (error) {
     return res.status(500).json({ message: "Room create failed", error: error.message });
@@ -62,6 +65,11 @@ app.get("/api/rooms/:roomId", async (req, res) => {
       return res.status(404).json({ message: "Room not found" });
     }
 
+    if (isRoomExpired(room)) {
+      await Room.deleteOne({ roomId: req.params.roomId });
+      return res.status(410).json({ message: "Room expired" });
+    }
+
     return res.json({
       roomId: room.roomId,
       createdAt: room.createdAt,
@@ -69,6 +77,7 @@ app.get("/api/rooms/:roomId", async (req, res) => {
       hasSnapshot: Boolean(room.lastSnapshot),
       currentUsers: room.currentUsers || 0,
       peakUsers: room.peakUsers || 0,
+      expiresAt: room.expiresAt,
     });
   } catch (error) {
     return res.status(500).json({ message: "Room fetch failed", error: error.message });
@@ -87,6 +96,13 @@ io.on("connection", async (socket) => {
     const room = await Room.findOne({ roomId });
     if (!room) {
       socket.emit("room-error", "Room not found");
+      socket.disconnect(true);
+      return;
+    }
+
+    if (isRoomExpired(room)) {
+      await Room.deleteOne({ roomId });
+      socket.emit("room-error", "Room expired");
       socket.disconnect(true);
       return;
     }

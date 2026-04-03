@@ -27,6 +27,11 @@ const roomSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    expiresAt: {
+      type: Date,
+      default: () => new Date(Date.now() + 24 * 60 * 60 * 1000),
+      index: { expires: 0 },
+    },
     lastActiveAt: {
       type: Date,
       default: Date.now,
