@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 const FRONTEND_URL = process.env.FRONTEND_URL;
 
-// ✅ SIMPLE & CORRECT CORS
+// ✅ CLEAN CORS (FINAL)
 app.use(cors({
   origin: FRONTEND_URL,
   methods: ["GET", "POST"],
@@ -26,12 +26,12 @@ app.use(express.json({ limit: "10mb" }));
 
 const server = http.createServer(app);
 
-// ✅ SOCKET.IO CORS FIXED
+// ✅ SOCKET.IO CORS (MATCHED)
 const io = new Server(server, {
   cors: {
     origin: FRONTEND_URL,
-    methods: ["GET", "POST"],
-  },
+    methods: ["GET", "POST"]
+  }
 });
 
 const createRoomId = () => crypto.randomBytes(12).toString("hex");
