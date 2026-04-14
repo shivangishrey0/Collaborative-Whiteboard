@@ -6,6 +6,7 @@ const dotenv = require("dotenv");
 const mongoose = require("mongoose");
 const crypto = require("crypto");
 const Room = require("./models/Room");
+const { registerSocketHandlers } = require("./socket/registerSocketHandlers");
 
 dotenv.config();
 
@@ -14,21 +15,30 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
-app.use(cors({ origin: FRONTEND_URL }));
+const isLocalDevOrigin = (origin) => /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin || "");
+const isOriginAllowed = (origin) => !origin || origin === FRONTEND_URL || isLocalDevOrigin(origin);
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (isOriginAllowed(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error("CORS origin not allowed"));
+  },
+  methods: ["GET", "POST"],
+};
+
+app.use(cors(corsOptions));
 app.use(express.json({ limit: "10mb" }));
 
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  cors: {
-    origin: FRONTEND_URL,
-    methods: ["GET", "POST"],
-  },
+  cors: corsOptions,
 });
 
 const createRoomId = () => crypto.randomBytes(12).toString("hex");
-
-const getRoomUserCount = (roomId) => io.sockets.adapter.rooms.get(roomId)?.size || 0;
 
 const isRoomExpired = (room) => Boolean(room?.expiresAt && new Date(room.expiresAt).getTime() <= Date.now());
 
@@ -84,91 +94,7 @@ app.get("/api/rooms/:roomId", async (req, res) => {
   }
 });
 
-io.on("connection", async (socket) => {
-  try {
-    const roomId = socket.handshake.auth?.roomId;
-    if (!roomId) {
-      socket.emit("room-error", "Room ID missing");
-      socket.disconnect(true);
-      return;
-    }
-
-    const room = await Room.findOne({ roomId });
-    if (!room) {
-      socket.emit("room-error", "Room not found");
-      socket.disconnect(true);
-      return;
-    }
-
-    if (isRoomExpired(room)) {
-      await Room.deleteOne({ roomId });
-      socket.emit("room-error", "Room expired");
-      socket.disconnect(true);
-      return;
-    }
-
-    socket.join(roomId);
-    socket.data.roomId = roomId;
-
-    console.log(`User Connected: ${socket.id} -> Room: ${roomId}`);
-
-    socket.emit("board-state", { snapshot: room.lastSnapshot || null });
-    const currentUsers = getRoomUserCount(roomId);
-    io.to(roomId).emit("user-count", currentUsers);
-    await Room.updateOne(
-      { roomId },
-      {
-        $set: { currentUsers, lastActiveAt: new Date() },
-        $max: { peakUsers: currentUsers },
-      }
-    );
-
-    socket.on("start-draw", (data) => {
-      socket.to(roomId).emit("start-draw", data);
-    });
-
-    socket.on("drawing", (data) => {
-      socket.to(roomId).emit("drawing", data);
-    });
-
-    socket.on("stop-draw", () => {
-      socket.to(roomId).emit("stop-draw");
-    });
-
-    socket.on("clear", async () => {
-      io.to(roomId).emit("clear");
-      await Room.updateOne({ roomId }, { $set: { lastSnapshot: "", lastActiveAt: new Date() } });
-    });
-
-    socket.on("draw-shape", (data) => {
-      socket.to(roomId).emit("draw-shape", data);
-    });
-
-    socket.on("save-snapshot", async ({ snapshot }) => {
-      if (!snapshot || typeof snapshot !== "string") return;
-      await Room.updateOne(
-        { roomId },
-        { $set: { lastSnapshot: snapshot, lastActiveAt: new Date() } }
-      );
-    });
-
-    socket.on("disconnect", () => {
-      console.log(`User Disconnected: ${socket.id} -> Room: ${roomId}`);
-      const remainingUsers = getRoomUserCount(roomId);
-      io.to(roomId).emit("user-count", remainingUsers);
-      Room.updateOne(
-        { roomId },
-        { $set: { currentUsers: remainingUsers, lastActiveAt: new Date() } }
-      ).catch((updateError) => {
-        console.error("Failed to update room user count:", updateError.message);
-      });
-    });
-  } catch (error) {
-    console.error("Socket connection error:", error.message);
-    socket.emit("room-error", "Room connection failed");
-    socket.disconnect(true);
-  }
-});
+registerSocketHandlers({ io, Room, isRoomExpired });
 
 const startServer = async () => {
   try {
@@ -178,6 +104,16 @@ const startServer = async () => {
 
     await mongoose.connect(MONGO_URI);
     console.log("MongoDB connected");
+
+    server.on("error", (error) => {
+      if (error.code === "EADDRINUSE") {
+        console.error(`Port ${PORT} is already in use. Stop the existing backend process or change PORT in .env.`);
+        process.exit(1);
+      }
+
+      console.error("Server error:", error.message);
+      process.exit(1);
+    });
 
     server.listen(PORT, () => {
       console.log(`Server is running on http://localhost:${PORT}`);
