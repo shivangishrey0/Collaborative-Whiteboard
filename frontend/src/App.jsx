@@ -3,6 +3,7 @@ import { io } from "socket.io-client";
 import Board from "./components/Board";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
+console.log("BACKEND URL:", BACKEND_URL);
 function App() {
   const boardRef = useRef(null);
   const imageInputRef = useRef(null);
