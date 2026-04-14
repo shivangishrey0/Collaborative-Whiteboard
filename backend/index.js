@@ -11,36 +11,33 @@ const { registerSocketHandlers } = require("./socket/registerSocketHandlers");
 dotenv.config();
 
 const app = express();
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
+const FRONTEND_URL = process.env.FRONTEND_URL;
 
-const isLocalDevOrigin = (origin) => /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin || "");
-const isOriginAllowed = (origin) => !origin || origin === FRONTEND_URL || isLocalDevOrigin(origin);
-
-const corsOptions = {
-  origin: (origin, callback) => {
-    if (isOriginAllowed(origin)) {
-      callback(null, true);
-      return;
-    }
-    callback(new Error("CORS origin not allowed"));
-  },
+// ✅ SIMPLE & CORRECT CORS
+app.use(cors({
+  origin: FRONTEND_URL,
   methods: ["GET", "POST"],
-};
+  credentials: true
+}));
 
-app.use(cors(corsOptions));
 app.use(express.json({ limit: "10mb" }));
 
 const server = http.createServer(app);
 
+// ✅ SOCKET.IO CORS FIXED
 const io = new Server(server, {
-  cors: corsOptions,
+  cors: {
+    origin: FRONTEND_URL,
+    methods: ["GET", "POST"],
+  },
 });
 
 const createRoomId = () => crypto.randomBytes(12).toString("hex");
 
-const isRoomExpired = (room) => Boolean(room?.expiresAt && new Date(room.expiresAt).getTime() <= Date.now());
+const isRoomExpired = (room) =>
+  Boolean(room?.expiresAt && new Date(room.expiresAt).getTime() <= Date.now());
 
 app.get("/health", (req, res) => {
   res.json({ ok: true, service: "whiteboard-backend" });
@@ -50,27 +47,31 @@ app.post("/api/rooms", async (req, res) => {
   try {
     let roomId = createRoomId();
 
-    // Retry a few times to avoid a rare ID collision.
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 5; i++) {
       const exists = await Room.exists({ roomId });
       if (!exists) break;
       roomId = createRoomId();
     }
 
     const room = await Room.create({ roomId });
+
     return res.status(201).json({
       roomId: room.roomId,
       roomLink: `${FRONTEND_URL}/?room=${room.roomId}`,
       expiresAt: room.expiresAt,
     });
   } catch (error) {
-    return res.status(500).json({ message: "Room create failed", error: error.message });
+    return res.status(500).json({
+      message: "Room create failed",
+      error: error.message,
+    });
   }
 });
 
 app.get("/api/rooms/:roomId", async (req, res) => {
   try {
     const room = await Room.findOne({ roomId: req.params.roomId }).lean();
+
     if (!room) {
       return res.status(404).json({ message: "Room not found" });
     }
@@ -90,7 +91,10 @@ app.get("/api/rooms/:roomId", async (req, res) => {
       expiresAt: room.expiresAt,
     });
   } catch (error) {
-    return res.status(500).json({ message: "Room fetch failed", error: error.message });
+    return res.status(500).json({
+      message: "Room fetch failed",
+      error: error.message,
+    });
   }
 });
 
@@ -105,19 +109,10 @@ const startServer = async () => {
     await mongoose.connect(MONGO_URI);
     console.log("MongoDB connected");
 
-    server.on("error", (error) => {
-      if (error.code === "EADDRINUSE") {
-        console.error(`Port ${PORT} is already in use. Stop the existing backend process or change PORT in .env.`);
-        process.exit(1);
-      }
-
-      console.error("Server error:", error.message);
-      process.exit(1);
-    });
-
     server.listen(PORT, () => {
-      console.log(`Server is running on http://localhost:${PORT}`);
+      console.log(`Server is running on port ${PORT}`);
     });
+
   } catch (error) {
     console.error("Server startup failed:", error.message);
     process.exit(1);
