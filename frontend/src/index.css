@@ -1,0 +1,64 @@
+/* Prevent overscroll / pull-to-refresh on mobile */
+html, body {
+  margin: 0;
+  padding: 0;
+  overscroll-behavior: none;
+  overflow-x: hidden;
+}
+
+/* Mobile-responsive adjustments */
+@media (max-width: 768px) {
+  h1 {
+    font-size: 18px !important;
+    margin: 6px 0 !important;
+  }
+
+  /* Room controls row */
+  .room-controls,
+  div[style*="justifyContent"] {
+    gap: 6px !important;
+    padding: 6px !important;
+  }
+
+  /* Buttons and inputs shrink on mobile */
+  button {
+    padding: 6px 8px !important;
+    font-size: 12px !important;
+  }
+
+  input[type="text"] {
+    min-width: 120px !important;
+    font-size: 13px !important;
+    padding: 6px !important;
+  }
+
+  select {
+    font-size: 12px !important;
+    padding: 4px !important;
+  }
+
+  label {
+    font-size: 11px !important;
+  }
+
+  /* Brush size slider */
+  input[type="range"] {
+    width: 60px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  h1 {
+    font-size: 15px !important;
+  }
+
+  button {
+    padding: 5px 6px !important;
+    font-size: 11px !important;
+  }
+
+  input[type="text"] {
+    min-width: 100px !important;
+    font-size: 12px !important;
+  }
+}

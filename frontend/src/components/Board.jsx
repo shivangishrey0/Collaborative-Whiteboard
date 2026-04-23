@@ -9,6 +9,8 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
   // Tracks the last known position of each remote user's drawing stroke,
   // so we can draw self-contained line segments without touching the local path.
   const remoteDrawStateRef = useRef({});
+  // Tracks the local user's last draw position for self-contained line segments.
+  const localDrawPosRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
   
   const [startPos, setStartPos] = useState({ x: 0, y: 0 }); 
@@ -553,6 +555,41 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     setFloatingInput({ kind: "", visible: false, x: 0, y: 0, clientX: 0, clientY: 0, text: "" });
   };
 
+  // Convert a TouchEvent into the same shape the drawing functions expect.
+  const getTouchOffset = (touch) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { offsetX: 0, offsetY: 0, clientX: touch.clientX, clientY: touch.clientY };
+    const rect = canvas.getBoundingClientRect();
+    return {
+      offsetX: touch.clientX - rect.left,
+      offsetY: touch.clientY - rect.top,
+      clientX: touch.clientX,
+      clientY: touch.clientY,
+    };
+  };
+
+  const handleTouchStart = (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (!touch) return;
+    startDrawing({ nativeEvent: getTouchOffset(touch) });
+  };
+
+  const handleTouchMove = (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (!touch) return;
+    draw({ nativeEvent: getTouchOffset(touch) });
+  };
+
+  const handleTouchEnd = (e) => {
+    e.preventDefault();
+    // Use changedTouches for the final position since touches is empty on touchend.
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+    stopDrawing({ nativeEvent: getTouchOffset(touch) });
+  };
+
   const startDrawing = ({ nativeEvent }) => {
     const { offsetX, offsetY, clientX, clientY } = nativeEvent;
     
@@ -590,8 +627,9 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     ctx.lineWidth = brushSize;
     ctx.globalCompositeOperation = isEraser ? "destination-out" : "source-over";
 
-    ctx.beginPath();
-    ctx.moveTo(offsetX, offsetY);
+    // Store position in ref instead of starting a persistent path.
+    // This prevents remote drawing events from corrupting our path.
+    localDrawPosRef.current = { x: offsetX, y: offsetY };
     setIsDrawing(true);
     setStartPos({ x: offsetX, y: offsetY });
 
@@ -619,8 +657,13 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     const ctx = canvasRef.current.getContext("2d");
 
     if (tool === "pencil" || tool === "eraser") {
+      // Draw a self-contained line segment so remote events can never corrupt our path.
+      const lastPos = localDrawPosRef.current;
+      ctx.beginPath();
+      ctx.moveTo(lastPos ? lastPos.x : offsetX, lastPos ? lastPos.y : offsetY);
       ctx.lineTo(offsetX, offsetY);
       ctx.stroke();
+      localDrawPosRef.current = { x: offsetX, y: offsetY };
       socket.emit("drawing", {
         x: offsetX,
         y: offsetY,
@@ -652,7 +695,8 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     
     const { offsetX, offsetY } = nativeEvent;
     const ctx = canvasRef.current.getContext("2d");
-    ctx.closePath();
+    // No closePath() needed — we use self-contained segments, no persistent path.
+    localDrawPosRef.current = null;
     setIsDrawing(false);
 
     if (tool !== "pencil" && tool !== "eraser") {
@@ -687,13 +731,18 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
           onMouseMove={draw}
           onMouseUp={stopDrawing}
           onMouseLeave={handleMouseLeave}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
           style={{
             border: "2px solid #ccc",
             cursor: tool === "eraser" ? "cell" : tool === "text" ? "text" : "crosshair",
             boxShadow: "0 4px 8px rgba(0,0,0,0.1)",
             backgroundColor: "white",
             backgroundImage: bgStyles[bgType],
-            backgroundSize: bgSizes[bgType]
+            backgroundSize: bgSizes[bgType],
+            touchAction: "none",
+            maxWidth: "100vw",
           }}
         />
 
