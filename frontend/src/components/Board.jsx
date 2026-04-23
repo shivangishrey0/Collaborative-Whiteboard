@@ -85,7 +85,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
   const pushSnapshot = () => {
     const canvas = canvasRef.current;
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+    const dataUrl = canvas.toDataURL("image/png");
     socket.emit("save-snapshot", { snapshot: dataUrl });
     const newHistory = history.slice(0, historyStep + 1);
     const nextHistory = [...newHistory, dataUrl].slice(-MAX_HISTORY_STATES);
@@ -343,11 +343,13 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
     const handleStickyUpdate = (note) => {
       if (!note?.id) return;
+      const patch = { id: note.id };
+      if (typeof note.x === "number") patch.x = note.x;
+      if (typeof note.y === "number") patch.y = note.y;
+      if (typeof note.text === "string") patch.text = note.text;
+
       upsertStickyNote({
-        id: note.id,
-        x: note.x,
-        y: note.y,
-        text: typeof note.text === "string" ? note.text : undefined,
+        ...patch,
       });
     };
 
@@ -876,18 +878,28 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
             onMouseDown={handleTextDragStart}
             style={{
               width: "100%",
-              height: "15px",
+              minHeight: "20px",
               backgroundColor: floatingInput.kind === "sticky" ? "#e6c84f" : "#ccc",
               cursor: isDraggingText ? "grabbing" : "grab",
               display: "flex",
-              justifyContent: "center",
+              justifyContent: "space-between",
               alignItems: "center",
               fontSize: "10px",
               fontWeight: "bold",
-              userSelect: "none"
+              userSelect: "none",
+              padding: "0 6px",
             }}
           >
-            🖐️ Move
+            <span>🖐️ Move</span>
+            <button
+              type="button"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => setFloatingInput({ kind: "", visible: false, x: 0, y: 0, clientX: 0, clientY: 0, text: "" })}
+              title="Close"
+              style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: "12px", fontWeight: "bold", color: "#333", padding: 0, lineHeight: 1 }}
+            >
+              ✕
+            </button>
           </div>
           
           <input

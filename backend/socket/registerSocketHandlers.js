@@ -235,12 +235,10 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
         if (!payload || typeof payload !== "object") return;
         if (!payload.id) return;
 
-        const notePayload = {
-          id: payload.id,
-          x: payload.x,
-          y: payload.y,
-          text: payload.text,
-        };
+        const notePayload = { id: payload.id };
+        if (typeof payload.x === "number") notePayload.x = payload.x;
+        if (typeof payload.y === "number") notePayload.y = payload.y;
+        if (typeof payload.text === "string") notePayload.text = payload.text;
 
         syncStickyNotesToRoom(Room, roomId, (stickyNotes) =>
           stickyNotes.map((item) =>
