@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
 
 const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImageData, onImagePlaced, currentUserName }, ref) => {
+  const MAX_HISTORY_STATES = 250;
   const canvasRef = useRef(null);
   const cursorEmitRef = useRef({ lastSentAt: 0 });
   const stickySyncTimeoutsRef = useRef({});
@@ -84,11 +85,12 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
   const pushSnapshot = () => {
     const canvas = canvasRef.current;
-    const dataUrl = canvas.toDataURL();
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
     socket.emit("save-snapshot", { snapshot: dataUrl });
     const newHistory = history.slice(0, historyStep + 1);
-    setHistory([...newHistory, dataUrl]);
-    setHistoryStep(newHistory.length);
+    const nextHistory = [...newHistory, dataUrl].slice(-MAX_HISTORY_STATES);
+    setHistory(nextHistory);
+    setHistoryStep(nextHistory.length - 1);
   };
 
   const wrapText = (ctx, text, maxWidth) => {

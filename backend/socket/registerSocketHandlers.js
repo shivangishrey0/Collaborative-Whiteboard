@@ -3,10 +3,6 @@ const {
   removeUserFromRoom,
   getUsersInRoom,
   getRoomUserCount,
-  upsertStickyNote,
-  deleteStickyNote,
-  getStickyNotes,
-  clearStickyNotes,
 } = require("./roomPresence");
 
 const createCursorColor = () => `hsl(${Math.floor(Math.random() * 360)}, 75%, 45%)`;
@@ -32,6 +28,35 @@ const updateRoomUserStats = async (Room, roomId) => {
   );
 
   return currentUsers;
+};
+
+const emitStickyNotesState = (io, roomId, stickyNotes = []) => {
+  io.to(roomId).emit("sticky-notes-state", stickyNotes);
+};
+
+const emitDrawingActionsState = (io, roomId, drawingActions = []) => {
+  io.to(roomId).emit("drawing-actions-state", drawingActions);
+};
+
+const syncStickyNotesToRoom = async (Room, roomId, updater) => {
+  const room = await Room.findOne({ roomId }).select("stickyNotes");
+  if (!room) return null;
+
+  const nextStickyNotes = updater(Array.isArray(room.stickyNotes) ? room.stickyNotes : []);
+  room.stickyNotes = nextStickyNotes;
+  await room.save();
+  return nextStickyNotes;
+};
+
+const syncDrawingActionsToRoom = async (Room, roomId, action) => {
+  const room = await Room.findOne({ roomId }).select("drawingActions");
+  if (!room) return null;
+
+  const existingActions = Array.isArray(room.drawingActions) ? room.drawingActions : [];
+  const nextActions = [...existingActions, action].slice(-250);
+  room.drawingActions = nextActions;
+  await room.save();
+  return nextActions;
 };
 
 const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
@@ -85,7 +110,8 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
       });
 
       socket.emit("board-state", { snapshot: room.lastSnapshot || null });
-      socket.emit("sticky-notes-state", getStickyNotes(roomId));
+      socket.emit("sticky-notes-state", Array.isArray(room.stickyNotes) ? room.stickyNotes : []);
+      socket.emit("drawing-actions-state", Array.isArray(room.drawingActions) ? room.drawingActions : []);
 
       const currentUsers = await updateRoomUserStats(Room, roomId);
       io.to(roomId).emit("user-count", currentUsers);
@@ -97,6 +123,16 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           userName: socket.data.userName,
           socketId: socket.id,
         });
+
+        syncDrawingActionsToRoom(Room, roomId, {
+          id: `${socket.id}-${Date.now()}-start`,
+          type: "start-draw",
+          userId: socket.id,
+          userName: socket.data.userName,
+          payload: { ...payload },
+        })
+          .then((nextActions) => emitDrawingActionsState(io, roomId, nextActions || []))
+          .catch((error) => console.error("Failed to persist start-draw action:", error.message));
       });
 
       socket.on("drawing", (payload) => {
@@ -105,6 +141,16 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           userName: socket.data.userName,
           socketId: socket.id,
         });
+
+        syncDrawingActionsToRoom(Room, roomId, {
+          id: `${socket.id}-${Date.now()}-draw`,
+          type: "drawing",
+          userId: socket.id,
+          userName: socket.data.userName,
+          payload: { ...payload },
+        })
+          .then((nextActions) => emitDrawingActionsState(io, roomId, nextActions || []))
+          .catch((error) => console.error("Failed to persist drawing action:", error.message));
       });
 
       socket.on("stop-draw", () => {
@@ -112,13 +158,23 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           userName: socket.data.userName,
           socketId: socket.id,
         });
+
+        syncDrawingActionsToRoom(Room, roomId, {
+          id: `${socket.id}-${Date.now()}-stop`,
+          type: "stop-draw",
+          userId: socket.id,
+          userName: socket.data.userName,
+          payload: {},
+        })
+          .then((nextActions) => emitDrawingActionsState(io, roomId, nextActions || []))
+          .catch((error) => console.error("Failed to persist stop-draw action:", error.message));
       });
 
       socket.on("clear", async () => {
         io.to(roomId).emit("clear");
-        clearStickyNotes(roomId);
-        io.to(roomId).emit("sticky-notes-state", []);
-        await Room.updateOne({ roomId }, { $set: { lastSnapshot: "", lastActiveAt: new Date() } });
+        await Room.updateOne({ roomId }, { $set: { lastSnapshot: "", stickyNotes: [], drawingActions: [], lastActiveAt: new Date() } });
+        emitStickyNotesState(io, roomId, []);
+        emitDrawingActionsState(io, roomId, []);
       });
 
       socket.on("draw-shape", (payload) => {
@@ -127,6 +183,16 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           userName: socket.data.userName,
           socketId: socket.id,
         });
+
+        syncDrawingActionsToRoom(Room, roomId, {
+          id: `${socket.id}-${Date.now()}-${payload?.tool || "shape"}`,
+          type: "draw-shape",
+          userId: socket.id,
+          userName: socket.data.userName,
+          payload: { ...payload },
+        })
+          .then((nextActions) => emitDrawingActionsState(io, roomId, nextActions || []))
+          .catch((error) => console.error("Failed to persist draw-shape action:", error.message));
       });
 
       socket.on("sticky-note-create", (payload) => {
@@ -140,13 +206,29 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
 
         if (!notePayload.id) return;
 
-        upsertStickyNote(roomId, notePayload);
-
-        io.to(roomId).emit("sticky-note-create", {
-          ...notePayload,
-          userName: socket.data.userName,
-          socketId: socket.id,
-        });
+        syncStickyNotesToRoom(Room, roomId, (stickyNotes) => {
+          const withoutDuplicate = stickyNotes.filter((item) => item.id !== notePayload.id);
+          return [
+            ...withoutDuplicate,
+            {
+              ...notePayload,
+              createdBy: socket.id,
+              updatedBy: socket.id,
+              updatedAt: new Date(),
+            },
+          ];
+        })
+          .then((nextStickyNotes) => {
+            io.to(roomId).emit("sticky-note-create", {
+              ...notePayload,
+              userName: socket.data.userName,
+              socketId: socket.id,
+            });
+            emitStickyNotesState(io, roomId, nextStickyNotes || []);
+          })
+          .catch((error) => {
+            console.error("Failed to persist sticky note create:", error.message);
+          });
       });
 
       socket.on("sticky-note-update", (payload) => {
@@ -160,24 +242,45 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           text: payload.text,
         };
 
-        upsertStickyNote(roomId, notePayload);
-
-        io.to(roomId).emit("sticky-note-update", {
-          ...notePayload,
-          userName: socket.data.userName,
-          socketId: socket.id,
-        });
+        syncStickyNotesToRoom(Room, roomId, (stickyNotes) =>
+          stickyNotes.map((item) =>
+            item.id === notePayload.id
+              ? {
+                  ...item,
+                  ...notePayload,
+                  updatedBy: socket.id,
+                  updatedAt: new Date(),
+                }
+              : item
+          )
+        )
+          .then((nextStickyNotes) => {
+            io.to(roomId).emit("sticky-note-update", {
+              ...notePayload,
+              userName: socket.data.userName,
+              socketId: socket.id,
+            });
+            emitStickyNotesState(io, roomId, nextStickyNotes || []);
+          })
+          .catch((error) => {
+            console.error("Failed to persist sticky note update:", error.message);
+          });
       });
 
       socket.on("sticky-note-delete", ({ id }) => {
         if (!id) return;
-        deleteStickyNote(roomId, id);
-
-        io.to(roomId).emit("sticky-note-delete", {
-          id,
-          userName: socket.data.userName,
-          socketId: socket.id,
-        });
+        syncStickyNotesToRoom(Room, roomId, (stickyNotes) => stickyNotes.filter((item) => item.id !== id))
+          .then((nextStickyNotes) => {
+            io.to(roomId).emit("sticky-note-delete", {
+              id,
+              userName: socket.data.userName,
+              socketId: socket.id,
+            });
+            emitStickyNotesState(io, roomId, nextStickyNotes || []);
+          })
+          .catch((error) => {
+            console.error("Failed to persist sticky note delete:", error.message);
+          });
       });
 
       socket.on("save-snapshot", async ({ snapshot }) => {

@@ -1,5 +1,36 @@
 const mongoose = require("mongoose");
 
+const stickyNoteSchema = new mongoose.Schema(
+  {
+    id: {
+      type: String,
+      required: true,
+      index: true,
+    },
+    x: {
+      type: Number,
+      required: true,
+    },
+    y: {
+      type: Number,
+      required: true,
+    },
+    text: {
+      type: String,
+      default: "",
+    },
+    createdBy: {
+      type: String,
+      default: "system",
+    },
+    updatedBy: {
+      type: String,
+      default: "system",
+    },
+  },
+  { _id: false, timestamps: true }
+);
+
 const roomSchema = new mongoose.Schema(
   {
     roomId: {
@@ -16,6 +47,26 @@ const roomSchema = new mongoose.Schema(
     lastSnapshot: {
       type: String,
       default: "",
+    },
+    drawingActions: {
+      type: [
+        new mongoose.Schema(
+          {
+            id: { type: String, required: true },
+            type: { type: String, required: true },
+            userId: { type: String, default: "" },
+            userName: { type: String, default: "" },
+            payload: { type: mongoose.Schema.Types.Mixed, default: {} },
+            createdAt: { type: Date, default: Date.now },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
+    stickyNotes: {
+      type: [stickyNoteSchema],
+      default: [],
     },
     currentUsers: {
       type: Number,
