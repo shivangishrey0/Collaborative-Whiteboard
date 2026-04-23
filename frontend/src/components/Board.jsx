@@ -6,6 +6,9 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
   const stickySyncTimeoutsRef = useRef({});
   const remoteCursorBufferRef = useRef({});
   const cursorFrameRef = useRef(null);
+  // Tracks the last known position of each remote user's drawing stroke,
+  // so we can draw self-contained line segments without touching the local path.
+  const remoteDrawStateRef = useRef({});
   const [isDrawing, setIsDrawing] = useState(false);
   
   const [startPos, setStartPos] = useState({ x: 0, y: 0 }); 
@@ -223,45 +226,60 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
 
-    const handleStartDraw = ({ x, y }) => {
-      ctx.beginPath();
-      ctx.moveTo(x, y);
+    const handleStartDraw = ({ x, y, socketId }) => {
+      // Record the remote user's start position — do NOT touch the shared ctx path.
+      const senderId = socketId || "unknown";
+      remoteDrawStateRef.current[senderId] = { x, y };
     };
 
-    const handleDrawing = ({ x, y, color: incomingColor, size: incomingSize, isEraser: incomingIsEraser, remoteColor, remoteSize, remoteIsEraser }) => {
-      const previousColor = ctx.strokeStyle;
-      const previousSize = ctx.lineWidth;
-      const previousOperation = ctx.globalCompositeOperation;
+    const handleDrawing = ({ x, y, color: incomingColor, size: incomingSize, isEraser: incomingIsEraser, remoteColor, remoteSize, remoteIsEraser, socketId }) => {
+      const senderId = socketId || "unknown";
+      const lastPos = remoteDrawStateRef.current[senderId];
 
       const strokeColor = incomingColor || remoteColor;
       const strokeSize = incomingSize || remoteSize;
       const strokeEraser = typeof incomingIsEraser === "boolean" ? incomingIsEraser : remoteIsEraser;
 
+      // Draw a self-contained line segment using save/restore so we never
+      // interfere with the local user's active path or context settings.
+      ctx.save();
       ctx.strokeStyle = strokeColor;
       ctx.lineWidth = strokeSize;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
       ctx.globalCompositeOperation = strokeEraser ? "destination-out" : "source-over";
 
+      ctx.beginPath();
+      if (lastPos) {
+        ctx.moveTo(lastPos.x, lastPos.y);
+      } else {
+        ctx.moveTo(x, y);
+      }
       ctx.lineTo(x, y);
       ctx.stroke();
+      ctx.restore();
 
-      ctx.strokeStyle = previousColor;
-      ctx.lineWidth = previousSize;
-      ctx.globalCompositeOperation = previousOperation;
+      // Update this remote user's last position for the next segment.
+      remoteDrawStateRef.current[senderId] = { x, y };
     };
 
-    const handleStopDraw = () => {
-      ctx.closePath();
+    const handleStopDraw = ({ socketId }) => {
+      // Clean up the remote user's tracking — do NOT touch the shared ctx path.
+      const senderId = socketId || "unknown";
+      delete remoteDrawStateRef.current[senderId];
     };
 
     const handleDrawShape = ({ startX, startY, endX, endY, text, tool: incomingTool, color: incomingColor, size: incomingSize, remoteTool, remoteColor, remoteSize }) => {
-      const previousColor = ctx.strokeStyle;
-      const previousSize = ctx.lineWidth;
       const shapeTool = incomingTool || remoteTool;
       const shapeColor = incomingColor || remoteColor;
       const shapeSize = incomingSize || remoteSize;
       
+      // Use save/restore so remote shapes never corrupt the local user's context.
+      ctx.save();
       ctx.strokeStyle = shapeColor;
       ctx.lineWidth = shapeSize;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
       ctx.globalCompositeOperation = "source-over";
 
       ctx.beginPath();
@@ -296,9 +314,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
         ctx.stroke();
       }
       
-      ctx.closePath();
-      ctx.strokeStyle = previousColor;
-      ctx.lineWidth = previousSize;
+      ctx.restore();
     };
 
     const handleClear = () => {
