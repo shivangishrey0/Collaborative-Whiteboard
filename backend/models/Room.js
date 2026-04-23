@@ -9,11 +9,23 @@ const stickyNoteSchema = new mongoose.Schema(
     },
     x: {
       type: Number,
-      required: true,
+      default: 0,
     },
     y: {
       type: Number,
-      required: true,
+      default: 0,
+    },
+    xRatio: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 1,
+    },
+    yRatio: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 1,
     },
     text: {
       type: String,

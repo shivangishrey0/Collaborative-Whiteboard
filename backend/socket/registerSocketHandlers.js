@@ -201,6 +201,8 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           id: payload.id,
           x: payload.x,
           y: payload.y,
+          xRatio: payload.xRatio,
+          yRatio: payload.yRatio,
           text: payload.text,
         };
 
@@ -218,13 +220,12 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
             },
           ];
         })
-          .then((nextStickyNotes) => {
-            io.to(roomId).emit("sticky-note-create", {
+          .then(() => {
+            socket.to(roomId).emit("sticky-note-create", {
               ...notePayload,
               userName: socket.data.userName,
               socketId: socket.id,
             });
-            emitStickyNotesState(io, roomId, nextStickyNotes || []);
           })
           .catch((error) => {
             console.error("Failed to persist sticky note create:", error.message);
@@ -238,6 +239,8 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
         const notePayload = { id: payload.id };
         if (typeof payload.x === "number") notePayload.x = payload.x;
         if (typeof payload.y === "number") notePayload.y = payload.y;
+        if (typeof payload.xRatio === "number") notePayload.xRatio = payload.xRatio;
+        if (typeof payload.yRatio === "number") notePayload.yRatio = payload.yRatio;
         if (typeof payload.text === "string") notePayload.text = payload.text;
 
         syncStickyNotesToRoom(Room, roomId, (stickyNotes) =>
@@ -252,13 +255,12 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
               : item
           )
         )
-          .then((nextStickyNotes) => {
-            io.to(roomId).emit("sticky-note-update", {
+          .then(() => {
+            socket.to(roomId).emit("sticky-note-update", {
               ...notePayload,
               userName: socket.data.userName,
               socketId: socket.id,
             });
-            emitStickyNotesState(io, roomId, nextStickyNotes || []);
           })
           .catch((error) => {
             console.error("Failed to persist sticky note update:", error.message);
@@ -268,13 +270,12 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
       socket.on("sticky-note-delete", ({ id }) => {
         if (!id) return;
         syncStickyNotesToRoom(Room, roomId, (stickyNotes) => stickyNotes.filter((item) => item.id !== id))
-          .then((nextStickyNotes) => {
-            io.to(roomId).emit("sticky-note-delete", {
+          .then(() => {
+            socket.to(roomId).emit("sticky-note-delete", {
               id,
               userName: socket.data.userName,
               socketId: socket.id,
             });
-            emitStickyNotesState(io, roomId, nextStickyNotes || []);
           })
           .catch((error) => {
             console.error("Failed to persist sticky note delete:", error.message);

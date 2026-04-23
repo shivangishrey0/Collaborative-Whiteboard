@@ -32,6 +32,8 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
   const createStickyId = () => `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 
+  const clampRatio = (value) => Math.max(0, Math.min(1, value));
+
   const upsertStickyNote = (note) => {
     setStickyNotes((prev) => {
       const existingIndex = prev.findIndex((item) => item.id === note.id);
@@ -333,10 +335,15 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
     const handleStickyCreate = (note) => {
       if (!note?.id) return;
+
+      const canvas = canvasRef.current;
+      const fallbackXRatio = typeof note.x === "number" && canvas?.width ? clampRatio(note.x / canvas.width) : 0;
+      const fallbackYRatio = typeof note.y === "number" && canvas?.height ? clampRatio(note.y / canvas.height) : 0;
+
       upsertStickyNote({
         id: note.id,
-        x: note.x || 0,
-        y: note.y || 0,
+        xRatio: typeof note.xRatio === "number" ? clampRatio(note.xRatio) : fallbackXRatio,
+        yRatio: typeof note.yRatio === "number" ? clampRatio(note.yRatio) : fallbackYRatio,
         text: note.text || "",
       });
     };
@@ -344,8 +351,11 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     const handleStickyUpdate = (note) => {
       if (!note?.id) return;
       const patch = { id: note.id };
-      if (typeof note.x === "number") patch.x = note.x;
-      if (typeof note.y === "number") patch.y = note.y;
+      const canvas = canvasRef.current;
+      if (typeof note.xRatio === "number") patch.xRatio = clampRatio(note.xRatio);
+      if (typeof note.yRatio === "number") patch.yRatio = clampRatio(note.yRatio);
+      if (typeof note.x === "number" && canvas?.width) patch.xRatio = clampRatio(note.x / canvas.width);
+      if (typeof note.y === "number" && canvas?.height) patch.yRatio = clampRatio(note.y / canvas.height);
       if (typeof note.text === "string") patch.text = note.text;
 
       upsertStickyNote({
@@ -355,13 +365,18 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
     const handleStickyState = (notes) => {
       if (!Array.isArray(notes)) return;
+      const canvas = canvasRef.current;
       setStickyNotes(
         notes
           .filter((note) => note?.id)
           .map((note) => ({
             id: note.id,
-            x: note.x || 0,
-            y: note.y || 0,
+            xRatio: typeof note.xRatio === "number"
+              ? clampRatio(note.xRatio)
+              : (typeof note.x === "number" && canvas?.width ? clampRatio(note.x / canvas.width) : 0),
+            yRatio: typeof note.yRatio === "number"
+              ? clampRatio(note.yRatio)
+              : (typeof note.y === "number" && canvas?.height ? clampRatio(note.y / canvas.height) : 0),
             text: note.text || "",
           }))
       );
@@ -541,10 +556,12 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
         userName: currentUserName,
       });
     } else if (currentFloatingInput.kind === "sticky") {
+      const canvasWidth = canvasRef.current?.width || 1;
+      const canvasHeight = canvasRef.current?.height || 1;
       const note = {
         id: createStickyId(),
-        x: Math.max(0, finalCanvasX),
-        y: Math.max(0, finalCanvasY),
+        xRatio: clampRatio(Math.max(0, finalCanvasX) / canvasWidth),
+        yRatio: clampRatio(Math.max(0, finalCanvasY) / canvasHeight),
         text: currentFloatingInput.text,
       };
 
@@ -802,9 +819,10 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
               key={note.id}
               style={{
                 position: "absolute",
-                left: note.x,
-                top: note.y,
+                left: `${(note.xRatio || 0) * 100}%`,
+                top: `${(note.yRatio || 0) * 100}%`,
                 width: `${stickyWidth}px`,
+                transform: "translate(0, 0)",
                 pointerEvents: "auto",
                 backgroundColor: "#fff59d",
                 border: "1px solid #c9a400",
