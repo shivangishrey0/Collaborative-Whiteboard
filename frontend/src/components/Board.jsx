@@ -1,5 +1,49 @@
 import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
 
+const wrapText = (ctx, text, maxWidth) => {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [""];
+
+  const lines = [];
+  let currentLine = words[0];
+
+  for (let i = 1; i < words.length; i += 1) {
+    const testLine = `${currentLine} ${words[i]}`;
+    const metrics = ctx.measureText(testLine);
+    if (metrics.width > maxWidth) {
+      lines.push(currentLine);
+      currentLine = words[i];
+    } else {
+      currentLine = testLine;
+    }
+  }
+
+  lines.push(currentLine);
+  return lines;
+};
+
+const drawStickyNote = (ctx, x, y, text, noteWidth = 220, fontSize = 16) => {
+  const padding = 14;
+  const lineHeight = fontSize + 6;
+  ctx.font = `${fontSize}px Arial`;
+  const lines = wrapText(ctx, text, noteWidth - padding * 2);
+  const noteHeight = Math.max(100, lines.length * lineHeight + padding * 2);
+
+  ctx.fillStyle = "#fff59d";
+  ctx.fillRect(x, y, noteWidth, noteHeight);
+  ctx.strokeStyle = "#c9a400";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, noteWidth, noteHeight);
+
+  ctx.fillStyle = "#222";
+  ctx.textBaseline = "top";
+  lines.forEach((line, index) => {
+    ctx.fillText(line, x + padding, y + padding + index * lineHeight);
+  });
+
+  return { noteWidth, noteHeight };
+};
+
 const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImageData, onImagePlaced, currentUserName }, ref) => {
   const MAX_HISTORY_STATES = 250;
   const canvasRef = useRef(null);
@@ -12,6 +56,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
   const remoteDrawStateRef = useRef({});
   // Tracks the local user's last draw position for self-contained line segments.
   const localDrawPosRef = useRef(null);
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [isDrawing, setIsDrawing] = useState(false);
   
   const [startPos, setStartPos] = useState({ x: 0, y: 0 }); 
@@ -58,85 +103,14 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
   const isEraser = tool === "eraser";
   const currentColor = isEraser ? "#FFFFFF" : color;
 
-  useImperativeHandle(ref, () => ({
-    undo: () => {
-      if (historyStep > 0) {
-        setHistoryStep(historyStep - 1);
-        restoreCanvas(history[historyStep - 1]);
-      } else if (historyStep === 0) {
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext("2d");
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        setHistoryStep(-1);
-      }
-    },
-    redo: () => {
-      if (historyStep < history.length - 1) {
-        setHistoryStep(historyStep + 1);
-        restoreCanvas(history[historyStep + 1]);
-      }
-    },
-    downloadBoard: () => {
-      const canvas = canvasRef.current;
-      const link = document.createElement("a");
-      link.download = `whiteboard-${Date.now()}.png`;
-      link.href = canvas.toDataURL("image/png");
-      link.click();
-    }
-  }));
-
   const pushSnapshot = () => {
     const canvas = canvasRef.current;
     const dataUrl = canvas.toDataURL("image/png");
-    socket.emit("save-snapshot", { snapshot: dataUrl });
+    socket?.emit("save-snapshot", { snapshot: dataUrl });
     const newHistory = history.slice(0, historyStep + 1);
     const nextHistory = [...newHistory, dataUrl].slice(-MAX_HISTORY_STATES);
     setHistory(nextHistory);
     setHistoryStep(nextHistory.length - 1);
-  };
-
-  const wrapText = (ctx, text, maxWidth) => {
-    const words = text.split(/\s+/).filter(Boolean);
-    if (words.length === 0) return [""];
-
-    const lines = [];
-    let currentLine = words[0];
-
-    for (let i = 1; i < words.length; i += 1) {
-      const testLine = `${currentLine} ${words[i]}`;
-      const metrics = ctx.measureText(testLine);
-      if (metrics.width > maxWidth) {
-        lines.push(currentLine);
-        currentLine = words[i];
-      } else {
-        currentLine = testLine;
-      }
-    }
-
-    lines.push(currentLine);
-    return lines;
-  };
-
-  const drawStickyNote = (ctx, x, y, text, noteWidth = 220, fontSize = 16) => {
-    const padding = 14;
-    const lineHeight = fontSize + 6;
-    ctx.font = `${fontSize}px Arial`;
-    const lines = wrapText(ctx, text, noteWidth - padding * 2);
-    const noteHeight = Math.max(100, lines.length * lineHeight + padding * 2);
-
-    ctx.fillStyle = "#fff59d";
-    ctx.fillRect(x, y, noteWidth, noteHeight);
-    ctx.strokeStyle = "#c9a400";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x, y, noteWidth, noteHeight);
-
-    ctx.fillStyle = "#222";
-    ctx.textBaseline = "top";
-    lines.forEach((line, index) => {
-      ctx.fillText(line, x + padding, y + padding + index * lineHeight);
-    });
-
-    return { noteWidth, noteHeight };
   };
 
   const drawImageOnCanvas = (ctx, dataUrl, x, y, width = 220) => new Promise((resolve) => {
@@ -150,7 +124,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     image.src = dataUrl;
   });
 
-  const restoreCanvas = (dataUrl) => {
+  function restoreCanvas(dataUrl) {
     if (!dataUrl) return;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
@@ -160,12 +134,60 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     };
-  };
+  }
+
+  function clearCanvas() {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setStickyNotes([]);
+
+    const blankState = canvas.toDataURL("image/png");
+    setHistory([blankState]);
+    setHistoryStep(0);
+  }
+
+  useImperativeHandle(ref, () => ({
+    undo: () => {
+      if (historyStep > 0) {
+        setHistoryStep(historyStep - 1);
+        restoreCanvas(history[historyStep - 1]);
+      } else if (historyStep === 0) {
+        clearCanvas();
+      }
+    },
+    redo: () => {
+      if (historyStep < history.length - 1) {
+        setHistoryStep(historyStep + 1);
+        restoreCanvas(history[historyStep + 1]);
+      }
+    },
+    clearBoard: () => {
+      clearCanvas();
+      socket?.emit("clear");
+    },
+    downloadBoard: () => {
+      const canvas = canvasRef.current;
+      const link = document.createElement("a");
+      link.download = `whiteboard-${Date.now()}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    }
+  }));
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight - 160;
+    const updateCanvasSize = () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight - 160;
+      canvas.width = width;
+      canvas.height = height;
+      setCanvasSize({ width, height });
+    };
+
+    updateCanvasSize();
     const ctx = canvas.getContext("2d");
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -173,15 +195,23 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     const initialData = canvas.toDataURL();
     setHistory([initialData]);
     setHistoryStep(0);
+
+    window.addEventListener("resize", updateCanvasSize);
+
+    return () => {
+      window.removeEventListener("resize", updateCanvasSize);
+    };
   }, []);
 
   useEffect(() => {
+    if (!socket) return undefined;
+
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
     ctx.strokeStyle = currentColor;
     ctx.lineWidth = brushSize;
     ctx.globalCompositeOperation = isEraser ? "destination-out" : "source-over";
-  }, [currentColor, brushSize, isEraser]);
+  }, [currentColor, brushSize, isEraser, socket]);
 
   useEffect(() => () => {
     if (cursorFrameRef.current !== null) {
@@ -324,7 +354,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     };
 
     const handleClear = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      clearCanvas();
     };
 
     const handleBoardState = ({ snapshot }) => {
@@ -475,12 +505,14 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
   }, [socket]);
 
   const scheduleStickySync = (id, payload) => {
+    if (!socket) return;
+
     if (stickySyncTimeoutsRef.current[id]) {
       clearTimeout(stickySyncTimeoutsRef.current[id]);
     }
 
     stickySyncTimeoutsRef.current[id] = setTimeout(() => {
-      socket.emit("sticky-note-update", payload);
+      socket?.emit("sticky-note-update", payload);
       delete stickySyncTimeoutsRef.current[id];
     }, 120);
   };
@@ -492,7 +524,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
   const deleteStickyNote = (id) => {
     setStickyNotes((prev) => prev.filter((note) => note.id !== id));
-    socket.emit("sticky-note-delete", { id });
+    socket?.emit("sticky-note-delete", { id });
   };
 
   const downloadStickyNote = (note) => {
@@ -514,7 +546,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
     const x = Math.max(0, Math.min(1, offsetX / canvas.width));
     const y = Math.max(0, Math.min(1, offsetY / canvas.height));
-    socket.emit("cursor-move", {
+    socket?.emit("cursor-move", {
       x,
       y,
       userId: socket.id,
@@ -546,7 +578,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
       ctx.font = `${brushSize * 3}px Arial`;
       ctx.fillStyle = currentColor;
       ctx.fillText(currentFloatingInput.text, finalCanvasX, finalCanvasY);
-      socket.emit("draw-shape", {
+      socket?.emit("draw-shape", {
         startX: finalCanvasX,
         startY: finalCanvasY,
         text: currentFloatingInput.text,
@@ -566,7 +598,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
       };
 
       upsertStickyNote(note);
-      socket.emit("sticky-note-create", note);
+      socket?.emit("sticky-note-create", note);
     }
 
     if (currentFloatingInput.kind !== "sticky") {
@@ -627,7 +659,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
       const ctx = canvasRef.current.getContext("2d");
       drawImageOnCanvas(ctx, pendingImageData, Math.max(0, offsetX - 110), Math.max(0, offsetY - 110)).then(({ width }) => {
-        socket.emit("draw-shape", {
+        socket?.emit("draw-shape", {
           startX: Math.max(0, offsetX - 110),
           startY: Math.max(0, offsetY - 110),
           text: pendingImageData,
@@ -657,7 +689,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     setSnapshot(ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height));
 
     if (tool === "pencil" || tool === "eraser") {
-      socket.emit("start-draw", {
+      socket?.emit("start-draw", {
         x: offsetX,
         y: offsetY,
         color: currentColor,
@@ -685,7 +717,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
       ctx.lineTo(offsetX, offsetY);
       ctx.stroke();
       localDrawPosRef.current = { x: offsetX, y: offsetY };
-      socket.emit("drawing", {
+      socket?.emit("drawing", {
         x: offsetX,
         y: offsetY,
         color: currentColor,
@@ -715,13 +747,12 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     if (!isDrawing || tool === "text") return; 
     
     const { offsetX, offsetY } = nativeEvent;
-    const ctx = canvasRef.current.getContext("2d");
     // No closePath() needed — we use self-contained segments, no persistent path.
     localDrawPosRef.current = null;
     setIsDrawing(false);
 
     if (tool !== "pencil" && tool !== "eraser") {
-      socket.emit("draw-shape", {
+      socket?.emit("draw-shape", {
         startX: startPos.x, startY: startPos.y, endX: offsetX, endY: offsetY,
         tool,
         color: currentColor,
@@ -729,7 +760,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
         userName: currentUserName,
       });
     } else {
-      socket.emit("stop-draw");
+      socket?.emit("stop-draw");
     }
 
     pushSnapshot();
@@ -737,7 +768,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
   const handleMouseLeave = (event) => {
     stopDrawing(event);
-    socket.emit("cursor-leave");
+    socket?.emit("cursor-leave");
   };
 
   const bgStyles = { plain: "none", ruled: "linear-gradient(#e5e5e5 1px, transparent 1px)", grid: "linear-gradient(#e5e5e5 1px, transparent 1px), linear-gradient(90deg, #e5e5e5 1px, transparent 1px)" };
@@ -769,10 +800,9 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
         <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
           {Object.entries(remoteCursors).map(([userId, cursor]) => {
-            const canvas = canvasRef.current;
-            if (!canvas || !cursor) return null;
-            const left = cursor.x * canvas.width;
-            const top = cursor.y * canvas.height;
+            if (!cursor || canvasSize.width === 0 || canvasSize.height === 0) return null;
+            const left = cursor.x * canvasSize.width;
+            const top = cursor.y * canvasSize.height;
 
             return (
               <div
