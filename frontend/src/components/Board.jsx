@@ -1,5 +1,49 @@
 import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
 
+const wrapText = (ctx, text, maxWidth) => {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [""];
+
+  const lines = [];
+  let currentLine = words[0];
+
+  for (let i = 1; i < words.length; i += 1) {
+    const testLine = `${currentLine} ${words[i]}`;
+    const metrics = ctx.measureText(testLine);
+    if (metrics.width > maxWidth) {
+      lines.push(currentLine);
+      currentLine = words[i];
+    } else {
+      currentLine = testLine;
+    }
+  }
+
+  lines.push(currentLine);
+  return lines;
+};
+
+const drawStickyNote = (ctx, x, y, text, noteWidth = 220, fontSize = 16) => {
+  const padding = 14;
+  const lineHeight = fontSize + 6;
+  ctx.font = `${fontSize}px Arial`;
+  const lines = wrapText(ctx, text, noteWidth - padding * 2);
+  const noteHeight = Math.max(100, lines.length * lineHeight + padding * 2);
+
+  ctx.fillStyle = "#fff59d";
+  ctx.fillRect(x, y, noteWidth, noteHeight);
+  ctx.strokeStyle = "#c9a400";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, noteWidth, noteHeight);
+
+  ctx.fillStyle = "#222";
+  ctx.textBaseline = "top";
+  lines.forEach((line, index) => {
+    ctx.fillText(line, x + padding, y + padding + index * lineHeight);
+  });
+
+  return { noteWidth, noteHeight };
+};
+
 const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImageData, onImagePlaced, currentUserName }, ref) => {
   const MAX_HISTORY_STATES = 250;
   const canvasRef = useRef(null);
@@ -27,6 +71,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
   const [historyStep, setHistoryStep] = useState(-1);
   const [remoteCursors, setRemoteCursors] = useState({});
   const [stickyNotes, setStickyNotes] = useState([]);
+  const [canvasSize, setCanvasDimensions] = useState({ width: 0, height: 0 });
 
   const stickyWidth = 220;
 
@@ -58,6 +103,39 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
   const isEraser = tool === "eraser";
   const currentColor = isEraser ? "#FFFFFF" : color;
 
+  const pushSnapshot = () => {
+    const canvas = canvasRef.current;
+    const dataUrl = canvas.toDataURL("image/png");
+    socket.emit("save-snapshot", { snapshot: dataUrl });
+    const newHistory = history.slice(0, historyStep + 1);
+    const nextHistory = [...newHistory, dataUrl].slice(-MAX_HISTORY_STATES);
+    setHistory(nextHistory);
+    setHistoryStep(nextHistory.length - 1);
+  };
+
+  const drawImageOnCanvas = (ctx, dataUrl, x, y, width = 220) => new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      const scale = width / image.width;
+      const height = image.height * scale;
+      ctx.drawImage(image, x, y, width, height);
+      resolve({ width, height });
+    };
+    image.src = dataUrl;
+  });
+
+  function restoreCanvas(dataUrl) {
+    if (!dataUrl) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const img = new Image();
+    img.src = dataUrl;
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    };
+  }
+
   useImperativeHandle(ref, () => ({
     undo: () => {
       if (historyStep > 0) {
@@ -85,87 +163,15 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     }
   }));
 
-  const pushSnapshot = () => {
-    const canvas = canvasRef.current;
-    const dataUrl = canvas.toDataURL("image/png");
-    socket.emit("save-snapshot", { snapshot: dataUrl });
-    const newHistory = history.slice(0, historyStep + 1);
-    const nextHistory = [...newHistory, dataUrl].slice(-MAX_HISTORY_STATES);
-    setHistory(nextHistory);
-    setHistoryStep(nextHistory.length - 1);
-  };
-
-  const wrapText = (ctx, text, maxWidth) => {
-    const words = text.split(/\s+/).filter(Boolean);
-    if (words.length === 0) return [""];
-
-    const lines = [];
-    let currentLine = words[0];
-
-    for (let i = 1; i < words.length; i += 1) {
-      const testLine = `${currentLine} ${words[i]}`;
-      const metrics = ctx.measureText(testLine);
-      if (metrics.width > maxWidth) {
-        lines.push(currentLine);
-        currentLine = words[i];
-      } else {
-        currentLine = testLine;
-      }
-    }
-
-    lines.push(currentLine);
-    return lines;
-  };
-
-  const drawStickyNote = (ctx, x, y, text, noteWidth = 220, fontSize = 16) => {
-    const padding = 14;
-    const lineHeight = fontSize + 6;
-    ctx.font = `${fontSize}px Arial`;
-    const lines = wrapText(ctx, text, noteWidth - padding * 2);
-    const noteHeight = Math.max(100, lines.length * lineHeight + padding * 2);
-
-    ctx.fillStyle = "#fff59d";
-    ctx.fillRect(x, y, noteWidth, noteHeight);
-    ctx.strokeStyle = "#c9a400";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x, y, noteWidth, noteHeight);
-
-    ctx.fillStyle = "#222";
-    ctx.textBaseline = "top";
-    lines.forEach((line, index) => {
-      ctx.fillText(line, x + padding, y + padding + index * lineHeight);
-    });
-
-    return { noteWidth, noteHeight };
-  };
-
-  const drawImageOnCanvas = (ctx, dataUrl, x, y, width = 220) => new Promise((resolve) => {
-    const image = new Image();
-    image.onload = () => {
-      const scale = width / image.width;
-      const height = image.height * scale;
-      ctx.drawImage(image, x, y, width, height);
-      resolve({ width, height });
-    };
-    image.src = dataUrl;
-  });
-
-  const restoreCanvas = (dataUrl) => {
-    if (!dataUrl) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    const img = new Image();
-    img.src = dataUrl;
-    img.onload = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    };
-  };
-
   useEffect(() => {
     const canvas = canvasRef.current;
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight - 160;
+    const setCanvasSize = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      setCanvasDimensions({ width: canvas.width, height: canvas.height });
+    };
+
+    setCanvasSize();
     const ctx = canvas.getContext("2d");
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -173,6 +179,11 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     const initialData = canvas.toDataURL();
     setHistory([initialData]);
     setHistoryStep(0);
+
+    window.addEventListener("resize", setCanvasSize);
+    return () => {
+      window.removeEventListener("resize", setCanvasSize);
+    };
   }, []);
 
   useEffect(() => {
@@ -715,7 +726,6 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     if (!isDrawing || tool === "text") return; 
     
     const { offsetX, offsetY } = nativeEvent;
-    const ctx = canvasRef.current.getContext("2d");
     // No closePath() needed — we use self-contained segments, no persistent path.
     localDrawPosRef.current = null;
     setIsDrawing(false);
@@ -745,7 +755,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
   return (
     <>
-      <div style={{ position: "relative", marginTop: "10px" }}>
+      <div style={{ position: "relative" }}>
         <canvas
           ref={canvasRef}
           onMouseDown={startDrawing}
@@ -756,23 +766,23 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
           style={{
-            border: "2px solid #ccc",
+            border: "1px solid rgba(210, 218, 242, 0.7)",
             cursor: tool === "eraser" ? "cell" : tool === "text" ? "text" : "crosshair",
-            boxShadow: "0 4px 8px rgba(0,0,0,0.1)",
+            boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.2)",
             backgroundColor: "white",
             backgroundImage: bgStyles[bgType],
             backgroundSize: bgSizes[bgType],
             touchAction: "none",
             maxWidth: "100vw",
+            display: "block",
           }}
         />
 
         <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
           {Object.entries(remoteCursors).map(([userId, cursor]) => {
-            const canvas = canvasRef.current;
-            if (!canvas || !cursor) return null;
-            const left = cursor.x * canvas.width;
-            const top = cursor.y * canvas.height;
+            if (!cursor || !canvasSize.width || !canvasSize.height) return null;
+            const left = cursor.x * canvasSize.width;
+            const top = cursor.y * canvasSize.height;
 
             return (
               <div
