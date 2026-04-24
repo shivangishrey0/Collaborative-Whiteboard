@@ -1,19 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { io } from "socket.io-client";
 import Board from "./components/Board";
-import "./App.css";
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
-
-const TOOL_ITEMS = [
-  { id: "pencil", icon: "✏", label: "Pen" },
-  { id: "eraser", icon: "⌫", label: "Eraser" },
-  { id: "rect", icon: "▭", label: "Shapes" },
-  { id: "text", icon: "T", label: "Text" },
-];
-
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
+console.log("BACKEND URL:", BACKEND_URL);
 function App() {
   const boardRef = useRef(null);
+  const imageInputRef = useRef(null);
   const toastTimeoutRef = useRef([]);
   const [socket, setSocket] = useState(null);
   const [status, setStatus] = useState("Create or join a room to start");
@@ -22,15 +15,16 @@ function App() {
   const [roomInput, setRoomInput] = useState("");
   const [nameInput, setNameInput] = useState(() => localStorage.getItem("whiteboard_user_name") || "");
   const [joinedUserName, setJoinedUserName] = useState("");
+  const [allowGuest, setAllowGuest] = useState(false);
   const [roomLink, setRoomLink] = useState("");
   const [roomExpiresAt, setRoomExpiresAt] = useState("");
   const [isRoomLoading, setIsRoomLoading] = useState(false);
+  const [pendingImageName, setPendingImageName] = useState("");
+  const [pendingImageData, setPendingImageData] = useState("");
   const [notifications, setNotifications] = useState([]);
   const [activeUsers, setActiveUsers] = useState([]);
-  const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
-  const [showSignInNudge, setShowSignInNudge] = useState(true);
 
-  const [color, setColor] = useState("#334155");
+  const [color, setColor] = useState("#000000");
   const [brushSize, setBrushSize] = useState(5);
   const [bgType, setBgType] = useState("plain");
   const [tool, setTool] = useState("pencil");
@@ -50,7 +44,7 @@ function App() {
     const timeoutId = setTimeout(() => {
       setNotifications((prev) => prev.filter((item) => item.id !== id));
       toastTimeoutRef.current = toastTimeoutRef.current.filter((entryId) => entryId !== timeoutId);
-    }, 2800);
+    }, 3500);
 
     toastTimeoutRef.current.push(timeoutId);
   };
@@ -60,14 +54,17 @@ function App() {
     const roomFromUrl = params.get("room");
     if (roomFromUrl) {
       setRoomInput(roomFromUrl);
-      setIsJoinModalOpen(true);
-      setStatus("Paste your room and continue as guest or with a name");
+      setStatus("Enter your name and click Join Room (or allow guest join)");
     }
   }, []);
 
   const resolveSessionUserName = () => {
     const trimmed = nameInput.trim();
-    return trimmed || "Guest";
+    if (trimmed) return trimmed;
+    if (allowGuest) return "Guest";
+
+    setStatus("Enter your name first, or enable guest join.");
+    return null;
   };
 
   useEffect(() => {
@@ -79,7 +76,7 @@ function App() {
     setSocket(nextSocket);
 
     const onConnect = () => {
-      setStatus(`Connected to ${roomId}`);
+      setStatus(`Connected to room ${roomId}`);
     };
     const onDisconnect = () => setStatus("Disconnected from server...");
     const onUserCount = (count) => setUserCount(count);
@@ -93,13 +90,13 @@ function App() {
       setActiveUsers(users);
       setUserCount(users.length);
     };
-    const onUserJoined = ({ userName: incomingUserName, socketId }) => {
+    const onUserJoined = ({ userName: joinedUserName, socketId }) => {
       if (socketId !== nextSocket.id) {
-        addNotification(`${incomingUserName || "Someone"} joined`);
+        addNotification(`${joinedUserName || "Someone"} joined the room`);
       }
     };
     const onUserLeft = ({ userName: leftUserName }) => {
-      addNotification(`${leftUserName || "Someone"} left`);
+      addNotification(`${leftUserName || "Someone"} left the room`);
     };
 
     nextSocket.on("connect", onConnect);
@@ -126,6 +123,7 @@ function App() {
 
   const createRoom = async () => {
     const sessionName = resolveSessionUserName();
+    if (!sessionName) return;
 
     try {
       setIsRoomLoading(true);
@@ -144,11 +142,9 @@ function App() {
 
       const nextUrl = `${window.location.origin}/?room=${data.roomId}`;
       window.history.replaceState({}, "", nextUrl);
-      setStatus("Board ready");
-      setIsJoinModalOpen(false);
     } catch (error) {
       const message = error instanceof TypeError
-        ? `Unable to reach backend at ${BACKEND_URL}. Ensure server and CORS are configured.`
+        ? `Unable to reach backend at ${BACKEND_URL}. Make sure backend server is running and CORS origin is configured.`
         : error.message;
       setStatus(message);
     } finally {
@@ -158,6 +154,7 @@ function App() {
 
   const joinRoom = async () => {
     const sessionName = resolveSessionUserName();
+    if (!sessionName) return;
 
     if (!roomInput.trim()) {
       setStatus("Please enter a room ID");
@@ -168,19 +165,17 @@ function App() {
       setIsRoomLoading(true);
       const response = await fetch(`${BACKEND_URL}/api/rooms/${roomInput.trim()}`);
       if (!response.ok) {
-        throw new Error("Room not found. Check room link or ID.");
+        throw new Error("Room not found. Check room link/ID.");
       }
 
       const data = await response.json();
 
       setRoomId(roomInput.trim());
-      setJoinedUserName(sessionName);
-      setRoomLink(`${window.location.origin}/?room=${roomInput.trim()}`);
+  setJoinedUserName(sessionName);
       setRoomExpiresAt(data.expiresAt || "");
       const nextUrl = `${window.location.origin}/?room=${roomInput.trim()}`;
       window.history.replaceState({}, "", nextUrl);
-      setStatus(`Joined ${roomInput.trim()}`);
-      setIsJoinModalOpen(false);
+      setStatus(`Joining room ${roomInput.trim()}...`);
     } catch (error) {
       setStatus(error.message);
     } finally {
@@ -192,206 +187,320 @@ function App() {
     const linkToCopy = roomLink || `${window.location.origin}/?room=${roomId}`;
     try {
       await navigator.clipboard.writeText(linkToCopy);
-      addNotification("Share link copied");
+      setStatus("Room link copied to clipboard");
     } catch {
       setStatus("Unable to copy automatically. Copy from browser URL.");
     }
   };
 
+  const handleImagePick = () => {
+    if (imageInputRef.current) {
+      imageInputRef.current.click();
+    }
+  };
+
+  const handleImageChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPendingImageData(String(reader.result || ""));
+      setPendingImageName(file.name);
+      setTool("image");
+      setStatus("Click on the board to place the image");
+    };
+    reader.readAsDataURL(file);
+    event.target.value = "";
+  };
+
+  const clearPendingImage = () => {
+    setPendingImageData("");
+    setPendingImageName("");
+  };
+
+  const downloadBoard = () => {
+    boardRef.current?.downloadBoard?.();
+  };
+
   const formatExpiryLabel = (expiresAt) => {
     if (!expiresAt) return "";
+
     const expiryDate = new Date(expiresAt);
     if (Number.isNaN(expiryDate.getTime())) return "";
+
     return expiryDate.toLocaleString();
   };
 
-  const participants = useMemo(() => {
-    if (activeUsers.length > 0) return activeUsers;
-    if (!joinedUserName) return [];
-    return [{ socketId: "self", userName: joinedUserName, cursorColor: "#4f46e5" }];
-  }, [activeUsers, joinedUserName]);
-
-  const getInitials = (name) => {
-    const safe = (name || "Guest").trim();
-    if (!safe) return "G";
-    const parts = safe.split(/\s+/).slice(0, 2);
-    return parts.map((part) => part[0].toUpperCase()).join("");
-  };
-
   return (
-    <div className="app-shell">
-      {!roomId && (
-        <main className="landing-wrap">
-          <section className="landing-card">
-            <span className="eyebrow">Collaborative whiteboard</span>
-            <h1>Sketch ideas together, instantly.</h1>
-            <p>
-              A clean, realtime canvas built for focused collaboration. Start as a guest and invite your team when ready.
-            </p>
-            <p className={`landing-status ${status.toLowerCase().includes("connected") ? "ok" : ""}`}>
-              {status}
-            </p>
-            <div className="landing-actions">
-              <button className="btn btn-primary" onClick={createRoom} disabled={isRoomLoading}>
-                {isRoomLoading ? "Starting..." : "Start Drawing"}
-              </button>
-              <button className="btn btn-secondary" onClick={() => setIsJoinModalOpen(true)}>
-                Join Room
-              </button>
-            </div>
-            <label className="name-field" htmlFor="displayNameInput">
-              Display name (optional)
-              <input
-                id="displayNameInput"
-                type="text"
-                value={nameInput}
-                maxLength={24}
-                onChange={(e) => setNameInput(e.target.value)}
-                placeholder="Continue as Guest if left blank"
-              />
-            </label>
-          </section>
-        </main>
-      )}
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", fontFamily: "sans-serif" }}>
+      <div style={{ textAlign: "center", marginBottom: "10px", width: "100%" }}>
+        <h1 style={{ margin: "10px 0" }}>Real-Time Collaborative Whiteboard</h1>
+        <p style={{ color: status.includes("Connected") ? "green" : "red", margin: "0 0 10px 0", fontSize: "14px" }}>
+          {status}
+        </p>
 
-      {roomId && (
-        <section className="workspace-wrap">
-          {socket && (
-            <Board
-              ref={boardRef}
-              socket={socket}
-              color={color}
-              brushSize={brushSize}
-              tool={tool}
-              bgType={bgType}
-              pendingImageData={""}
-              onImagePlaced={() => {}}
-              currentUserName={joinedUserName || "Guest"}
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "8px", padding: "10px", marginBottom: "10px", flexWrap: "wrap" }}>
+          <button
+            onClick={createRoom}
+            disabled={isRoomLoading}
+            style={{ padding: "8px 12px", backgroundColor: "#146c43", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}
+          >
+            ➕ Create Room
+          </button>
+
+          <input
+            type="text"
+            value={roomInput}
+            onChange={(e) => setRoomInput(e.target.value)}
+            placeholder="Enter Room ID"
+            style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc", minWidth: "240px" }}
+          />
+
+          <input
+            type="text"
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value)}
+            placeholder="Your name"
+            maxLength={24}
+            style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc", minWidth: "170px" }}
+          />
+
+          <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#444" }}>
+            <input
+              type="checkbox"
+              checked={allowGuest}
+              onChange={(e) => setAllowGuest(e.target.checked)}
             />
+            Allow guest join
+          </label>
+
+          <button
+            onClick={handleImagePick}
+            style={{ padding: "8px 12px", backgroundColor: "#fd7e14", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}
+          >
+            🖼️ Insert Image
+          </button>
+
+          <button
+            onClick={downloadBoard}
+            disabled={!socket}
+            style={{ padding: "8px 12px", backgroundColor: "#198754", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}
+          >
+            ⬇️ Download Board
+          </button>
+
+          <button
+            onClick={downloadBoard}
+            disabled={!socket}
+            title="Quick download"
+            style={{ padding: "8px 10px", backgroundColor: "#157347", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", minWidth: "40px" }}
+          >
+            ⬇
+          </button>
+
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleImageChange}
+            style={{ display: "none" }}
+          />
+
+          <button
+            onClick={joinRoom}
+            disabled={isRoomLoading}
+            style={{ padding: "8px 12px", backgroundColor: "#0d6efd", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}
+          >
+            🔐 Join Room
+          </button>
+
+          {roomId && (
+            <button
+              onClick={copyRoomLink}
+              style={{ padding: "8px 12px", backgroundColor: "#6f42c1", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}
+            >
+              🔗 Copy Room Link
+            </button>
+          )}
+        </div>
+
+        {pendingImageName && (
+          <div style={{ marginBottom: "10px", color: "#555", fontSize: "14px" }}>
+            Selected image: {pendingImageName}
+            <button
+              onClick={clearPendingImage}
+              style={{ marginLeft: "10px", padding: "4px 8px", borderRadius: "4px", border: "1px solid #ccc", cursor: "pointer" }}
+            >
+              Clear image
+            </button>
+          </div>
+        )}
+
+        {/* TOOLBAR */}
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "10px", padding: "10px", backgroundColor: "#f0f0f0", borderRadius: "8px", width: "95%", margin: "0 auto", flexWrap: "wrap" }}>
+
+          <div style={{ fontWeight: "bold", color: "#333", backgroundColor: "#e0e0e0", padding: "5px 10px", borderRadius: "5px" }}>
+            👤 Room Users: {userCount}
+          </div>
+
+          {roomExpiresAt && (
+            <div style={{ fontWeight: "bold", color: "#333", backgroundColor: "#e6f4ea", padding: "5px 10px", borderRadius: "5px" }}>
+              ⏳ Expires: {formatExpiryLabel(roomExpiresAt)}
+            </div>
           )}
 
-          <header className="top-bar">
-            <div className="top-bar-left">
-              <span className="room-pill">Room: {roomId}</span>
-              {roomExpiresAt && <span className="muted-pill">Expires {formatExpiryLabel(roomExpiresAt)}</span>}
-              <span className="status-pill">{status}</span>
-            </div>
-            <div className="top-bar-right">
-              <button className="icon-btn" onClick={() => boardRef.current?.undo?.()} title="Undo">↶</button>
-              <button className="icon-btn" onClick={() => boardRef.current?.redo?.()} title="Redo">↷</button>
-              <button className="icon-btn" onClick={() => socket?.emit("clear")} title="Clear board">⨯</button>
-              <button className="btn btn-share" onClick={copyRoomLink}>Share</button>
-              <div className="avatar-stack" title={`${userCount || participants.length} participants`}>
-                {participants.slice(0, 4).map((user) => (
-                  <span
-                    key={user.socketId}
-                    className="avatar"
-                    style={{ borderColor: user.cursorColor || "#4f46e5" }}
-                  >
-                    {getInitials(user.userName)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </header>
+          {/* Sheet Background Selector */}
+          <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+            <label htmlFor="bgType">Sheet:</label>
+            <select
+              id="bgType"
+              value={bgType}
+              onChange={(e) => setBgType(e.target.value)}
+              style={{ padding: "5px", borderRadius: "5px", cursor: "pointer" }}
+            >
+              <option value="plain">⬜ Plain</option>
+              <option value="ruled">📝 Ruled</option>
+              <option value="grid">▦ Grid</option>
+            </select>
+          </div>
 
-          <aside className="left-toolbar">
-            {TOOL_ITEMS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={`tool-btn ${tool === item.id ? "active" : ""}`}
-                onClick={() => setTool(item.id)}
-                title={item.label}
-              >
-                <span className="tool-icon">{item.icon}</span>
-              </button>
-            ))}
-            <div className="toolbar-divider" />
-            <button type="button" className={`tool-btn ${bgType === "plain" ? "active" : ""}`} onClick={() => setBgType("plain")} title="Plain sheet">
-              <span className="tool-icon">□</span>
-            </button>
-            <button type="button" className={`tool-btn ${bgType === "ruled" ? "active" : ""}`} onClick={() => setBgType("ruled")} title="Ruled sheet">
-              <span className="tool-icon">≡</span>
-            </button>
-            <button type="button" className={`tool-btn ${bgType === "grid" ? "active" : ""}`} onClick={() => setBgType("grid")} title="Grid sheet">
-              <span className="tool-icon">▦</span>
-            </button>
-          </aside>
+          {/* NAYA TOOL SELECTOR */}
+          <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+            <label htmlFor="tool">Tool:</label>
+             <select 
+            id="tool" 
+            value={tool} 
+            onChange={(e) => setTool(e.target.value)}
+            style={{ padding: "5px", borderRadius: "5px", cursor: "pointer", fontWeight: "bold" }}
+          >
+            <option value="pencil">✏️ Pencil</option>
+            <option value="eraser">🧽 Eraser</option>
+            <option value="rect">🟩 Rectangle</option>
+            <option value="circle">⭕ Circle</option>
+            <option value="line">📏 Straight Line</option>
+            <option value="sticky">🗒️ Sticky Note</option>
+            <option value="image">🖼️ Image</option>
+            <option value="text">🔠 Text</option> {/* Naya option */}
+        </select>
+          </div>
+         
 
-          <div className="bottom-toolbar">
-            <label htmlFor="colorPicker">Color</label>
+          {/* Color Picker (Agar Eraser select hai toh disable ho jayega) */}
+          <div style={{ display: "flex", alignItems: "center", gap: "5px", opacity: tool === "eraser" ? 0.5 : 1 }}>
+            <label htmlFor="colorPicker">Color:</label>
             <input
-              id="colorPicker"
               type="color"
+              id="colorPicker"
               value={color}
               onChange={(e) => setColor(e.target.value)}
               disabled={tool === "eraser"}
-              className="color-input"
+              style={{ cursor: tool === "eraser" ? "not-allowed" : "pointer" }}
             />
-            <label htmlFor="brushSize">Stroke</label>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+            <label htmlFor="brushSize">Size:</label>
             <input
-              id="brushSize"
               type="range"
+              id="brushSize"
               min="1"
               max="50"
               value={brushSize}
-              onChange={(e) => setBrushSize(Number(e.target.value))}
+              onChange={(e) => setBrushSize(e.target.value)}
+              style={{ cursor: "pointer", width: "80px" }}
             />
-            <span className="stroke-value">{brushSize}px</span>
           </div>
 
-          {showSignInNudge && (
-            <button className="signin-nudge" onClick={() => setShowSignInNudge(false)}>
-              Sign in to save your profile across devices
-            </button>
-          )}
-        </section>
-      )}
+          <button
+            onClick={() => boardRef.current.undo()}
+            disabled={!socket}
+            style={{ padding: "5px 10px", backgroundColor: "#ffcc00", border: "1px solid #ccc", borderRadius: "5px", cursor: "pointer", fontWeight: "bold" }}
+          >
+            ↩️ Undo
+          </button>
 
-      {isJoinModalOpen && (
-        <div className="modal-backdrop" onClick={() => setIsJoinModalOpen(false)}>
-          <div className="join-modal" onClick={(e) => e.stopPropagation()}>
-            <h2>Join Room</h2>
-            <p>Paste a room ID and continue as a guest or with your display name.</p>
-            <label htmlFor="roomInput">Room ID</label>
-            <input
-              id="roomInput"
-              type="text"
-              value={roomInput}
-              onChange={(e) => setRoomInput(e.target.value)}
-              placeholder="e.g. c2fbf2ad"
-            />
-            <label htmlFor="nameInput">Display name (optional)</label>
-            <input
-              id="nameInput"
-              type="text"
-              value={nameInput}
-              maxLength={24}
-              onChange={(e) => setNameInput(e.target.value)}
-              placeholder="Guest"
-            />
-            <div className="modal-actions">
-              <button className="btn btn-primary" onClick={joinRoom} disabled={isRoomLoading}>
-                Continue as Guest
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={() => {
-                  setStatus("Sign-in is optional and can be added later.");
-                  setIsJoinModalOpen(false);
+          <button
+            onClick={() => boardRef.current.redo()}
+            disabled={!socket}
+            style={{ padding: "5px 10px", backgroundColor: "#ffcc00", border: "1px solid #ccc", borderRadius: "5px", cursor: "pointer", fontWeight: "bold" }}
+          >
+            ↪️ Redo
+          </button>
+
+          <button
+            onClick={() => socket?.emit("clear")}
+            disabled={!socket}
+            style={{ padding: "5px 10px", backgroundColor: "#ff4d4d", color: "white", border: "none", borderRadius: "5px", cursor: "pointer", fontWeight: "bold" }}
+          >
+            🗑️ Clear
+          </button>
+
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", width: "95%", margin: "10px auto 0 auto", flexWrap: "wrap" }}>
+          <span style={{ fontSize: "13px", color: "#555", fontWeight: "bold" }}>Active:</span>
+          {joinedUserName && (
+            <span style={{ fontSize: "12px", color: "#666" }}>You: {joinedUserName}</span>
+          )}
+          {activeUsers.length === 0 ? (
+            <span style={{ fontSize: "13px", color: "#666" }}>No users connected</span>
+          ) : (
+            activeUsers.map((user) => (
+              <span
+                key={user.socketId}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  borderRadius: "999px",
+                  border: "1px solid #ddd",
+                  backgroundColor: "#fff",
+                  padding: "4px 10px",
+                  fontSize: "12px",
+                  color: "#333",
                 }}
               >
-                Sign In
-              </button>
-            </div>
-          </div>
+                <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: user.cursorColor || "#999" }} />
+                {user.userName || "Guest"}
+              </span>
+            ))
+          )}
+        </div>
+      </div>
+
+      {socket ? (
+        <Board
+          ref={boardRef}
+          socket={socket}
+          color={color}
+          brushSize={brushSize}
+          tool={tool}
+          bgType={bgType}
+          pendingImageData={pendingImageData}
+          onImagePlaced={clearPendingImage}
+          currentUserName={joinedUserName || "Guest"}
+        />
+      ) : (
+        <div style={{ marginTop: "40px", color: "#555", fontWeight: "bold" }}>
+          Create or join a room to start drawing.
         </div>
       )}
 
-      <div className="toast-wrap">
+      <div style={{ position: "fixed", top: "16px", right: "16px", zIndex: 1500, display: "flex", flexDirection: "column", gap: "8px", pointerEvents: "none" }}>
         {notifications.map((notification) => (
-          <div key={notification.id} className="toast-item">
+          <div
+            key={notification.id}
+            style={{
+              padding: "10px 12px",
+              borderRadius: "8px",
+              backgroundColor: "rgba(26, 26, 26, 0.9)",
+              color: "#fff",
+              fontSize: "13px",
+              minWidth: "210px",
+              boxShadow: "0 6px 18px rgba(0,0,0,0.22)",
+            }}
+          >
             {notification.message}
           </div>
         ))}
