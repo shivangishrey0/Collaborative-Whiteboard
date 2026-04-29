@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
 
+// Helper: wrap long text into lines for sticky notes and text shapes
 const wrapText = (ctx, text, maxWidth) => {
   const words = text.split(/\s+/).filter(Boolean);
   if (words.length === 0) return [""];
@@ -22,6 +23,7 @@ const wrapText = (ctx, text, maxWidth) => {
   return lines;
 };
 
+// Helper: draw a sticky note onto a CanvasRenderingContext2D
 const drawStickyNote = (ctx, x, y, text, noteWidth = 220, fontSize = 16) => {
   const padding = 14;
   const lineHeight = fontSize + 6;
@@ -44,9 +46,22 @@ const drawStickyNote = (ctx, x, y, text, noteWidth = 220, fontSize = 16) => {
   return { noteWidth, noteHeight };
 };
 
+// Helper: draw an image from data URL onto canvas (returns size)
+const drawImageOnCanvas = (ctx, dataUrl, x, y, width = 220) => new Promise((resolve) => {
+  const image = new Image();
+  image.onload = () => {
+    const scale = width / image.width;
+    const height = image.height * scale;
+    ctx.drawImage(image, x, y, width, height);
+    resolve({ width, height });
+  };
+  image.src = dataUrl;
+});
+
 const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImageData, onImagePlaced, currentUserName }, ref) => {
   const MAX_HISTORY_STATES = 250;
   const canvasRef = useRef(null);
+    const previewCanvasRef = useRef(null);
   const cursorEmitRef = useRef({ lastSentAt: 0 });
   const stickySyncTimeoutsRef = useRef({});
   const remoteCursorBufferRef = useRef({});
@@ -56,11 +71,10 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
   const remoteDrawStateRef = useRef({});
   // Tracks the local user's last draw position for self-contained line segments.
   const localDrawPosRef = useRef(null);
-  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [isDrawing, setIsDrawing] = useState(false);
   
   const [startPos, setStartPos] = useState({ x: 0, y: 0 }); 
-  const [snapshot, setSnapshot] = useState(null); 
+  // Snapshot is no longer used for previewing shapes — we use an overlay canvas
   
 
   const [floatingInput, setFloatingInput] = useState({ kind: "", visible: false, x: 0, y: 0, clientX: 0, clientY: 0, text: "" });
@@ -72,6 +86,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
   const [historyStep, setHistoryStep] = useState(-1);
   const [remoteCursors, setRemoteCursors] = useState({});
   const [stickyNotes, setStickyNotes] = useState([]);
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
 
   const stickyWidth = 220;
 
@@ -102,29 +117,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
   const isEraser = tool === "eraser";
   const currentColor = isEraser ? "#FFFFFF" : color;
-
-  const pushSnapshot = () => {
-    const canvas = canvasRef.current;
-    const dataUrl = canvas.toDataURL("image/png");
-    socket?.emit("save-snapshot", { snapshot: dataUrl });
-    const newHistory = history.slice(0, historyStep + 1);
-    const nextHistory = [...newHistory, dataUrl].slice(-MAX_HISTORY_STATES);
-    setHistory(nextHistory);
-    setHistoryStep(nextHistory.length - 1);
-  };
-
-  const drawImageOnCanvas = (ctx, dataUrl, x, y, width = 220) => new Promise((resolve) => {
-    const image = new Image();
-    image.onload = () => {
-      const scale = width / image.width;
-      const height = image.height * scale;
-      ctx.drawImage(image, x, y, width, height);
-      resolve({ width, height });
-    };
-    image.src = dataUrl;
-  });
-
-  function restoreCanvas(dataUrl) {
+  const restoreCanvas = (dataUrl) => {
     if (!dataUrl) return;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
@@ -134,20 +127,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     };
-  }
-
-  function clearCanvas() {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    setStickyNotes([]);
-
-    const blankState = canvas.toDataURL("image/png");
-    setHistory([blankState]);
-    setHistoryStep(0);
-  }
+  };
 
   useImperativeHandle(ref, () => ({
     undo: () => {
@@ -155,7 +135,10 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
         setHistoryStep(historyStep - 1);
         restoreCanvas(history[historyStep - 1]);
       } else if (historyStep === 0) {
-        clearCanvas();
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        setHistoryStep(-1);
       }
     },
     redo: () => {
@@ -163,10 +146,6 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
         setHistoryStep(historyStep + 1);
         restoreCanvas(history[historyStep + 1]);
       }
-    },
-    clearBoard: () => {
-      clearCanvas();
-      socket?.emit("clear");
     },
     downloadBoard: () => {
       const canvas = canvasRef.current;
@@ -177,41 +156,41 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     }
   }));
 
+  const pushSnapshot = () => {
+    const canvas = canvasRef.current;
+    const dataUrl = canvas.toDataURL("image/png");
+    socket.emit("save-snapshot", { snapshot: dataUrl });
+    const newHistory = history.slice(0, historyStep + 1);
+    const nextHistory = [...newHistory, dataUrl].slice(-MAX_HISTORY_STATES);
+    setHistory(nextHistory);
+    setHistoryStep(nextHistory.length - 1);
+  };
+
   useEffect(() => {
     const canvas = canvasRef.current;
-    const updateCanvasSize = () => {
-      const width = window.innerWidth;
-      const height = window.innerHeight - 160;
-      canvas.width = width;
-      canvas.height = height;
-      setCanvasSize({ width, height });
-    };
-
-    updateCanvasSize();
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight - 160;
     const ctx = canvas.getContext("2d");
+    const preview = previewCanvasRef.current;
+    if (preview) {
+      preview.width = canvas.width;
+      preview.height = canvas.height;
+    }
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-
+    setCanvasSize({ width: canvas.width, height: canvas.height });
     const initialData = canvas.toDataURL();
     setHistory([initialData]);
     setHistoryStep(0);
-
-    window.addEventListener("resize", updateCanvasSize);
-
-    return () => {
-      window.removeEventListener("resize", updateCanvasSize);
-    };
   }, []);
 
   useEffect(() => {
-    if (!socket) return undefined;
-
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
     ctx.strokeStyle = currentColor;
     ctx.lineWidth = brushSize;
     ctx.globalCompositeOperation = isEraser ? "destination-out" : "source-over";
-  }, [currentColor, brushSize, isEraser, socket]);
+  }, [currentColor, brushSize, isEraser]);
 
   useEffect(() => () => {
     if (cursorFrameRef.current !== null) {
@@ -354,7 +333,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     };
 
     const handleClear = () => {
-      clearCanvas();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
     };
 
     const handleBoardState = ({ snapshot }) => {
@@ -505,14 +484,12 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
   }, [socket]);
 
   const scheduleStickySync = (id, payload) => {
-    if (!socket) return;
-
     if (stickySyncTimeoutsRef.current[id]) {
       clearTimeout(stickySyncTimeoutsRef.current[id]);
     }
 
     stickySyncTimeoutsRef.current[id] = setTimeout(() => {
-      socket?.emit("sticky-note-update", payload);
+      socket.emit("sticky-note-update", payload);
       delete stickySyncTimeoutsRef.current[id];
     }, 120);
   };
@@ -524,7 +501,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
   const deleteStickyNote = (id) => {
     setStickyNotes((prev) => prev.filter((note) => note.id !== id));
-    socket?.emit("sticky-note-delete", { id });
+    socket.emit("sticky-note-delete", { id });
   };
 
   const downloadStickyNote = (note) => {
@@ -546,7 +523,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
     const x = Math.max(0, Math.min(1, offsetX / canvas.width));
     const y = Math.max(0, Math.min(1, offsetY / canvas.height));
-    socket?.emit("cursor-move", {
+    socket.emit("cursor-move", {
       x,
       y,
       userId: socket.id,
@@ -578,7 +555,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
       ctx.font = `${brushSize * 3}px Arial`;
       ctx.fillStyle = currentColor;
       ctx.fillText(currentFloatingInput.text, finalCanvasX, finalCanvasY);
-      socket?.emit("draw-shape", {
+      socket.emit("draw-shape", {
         startX: finalCanvasX,
         startY: finalCanvasY,
         text: currentFloatingInput.text,
@@ -598,7 +575,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
       };
 
       upsertStickyNote(note);
-      socket?.emit("sticky-note-create", note);
+      socket.emit("sticky-note-create", note);
     }
 
     if (currentFloatingInput.kind !== "sticky") {
@@ -659,7 +636,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
       const ctx = canvasRef.current.getContext("2d");
       drawImageOnCanvas(ctx, pendingImageData, Math.max(0, offsetX - 110), Math.max(0, offsetY - 110)).then(({ width }) => {
-        socket?.emit("draw-shape", {
+        socket.emit("draw-shape", {
           startX: Math.max(0, offsetX - 110),
           startY: Math.max(0, offsetY - 110),
           text: pendingImageData,
@@ -686,10 +663,11 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     setIsDrawing(true);
     setStartPos({ x: offsetX, y: offsetY });
 
-    setSnapshot(ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height));
+    // For non-pencil tools we preview on the overlay canvas instead of
+    // snapshotting main canvas. Keep existing behavior for pencil/eraser.
 
     if (tool === "pencil" || tool === "eraser") {
-      socket?.emit("start-draw", {
+      socket.emit("start-draw", {
         x: offsetX,
         y: offsetY,
         color: currentColor,
@@ -717,7 +695,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
       ctx.lineTo(offsetX, offsetY);
       ctx.stroke();
       localDrawPosRef.current = { x: offsetX, y: offsetY };
-      socket?.emit("drawing", {
+      socket.emit("drawing", {
         x: offsetX,
         y: offsetY,
         color: currentColor,
@@ -727,19 +705,33 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
         userName: currentUserName,
       });
     } else {
-      ctx.putImageData(snapshot, 0, 0);
-      ctx.beginPath();
-      
+      // Preview shapes on overlay canvas so remote updates aren't lost.
+      const overlay = previewCanvasRef.current;
+      if (!overlay) return;
+      const octx = overlay.getContext("2d");
+      octx.clearRect(0, 0, overlay.width, overlay.height);
+      octx.save();
+      octx.strokeStyle = currentColor;
+      octx.lineWidth = brushSize;
+      octx.lineCap = "round";
+      octx.lineJoin = "round";
+
       if (tool === "rect") {
-        ctx.rect(startPos.x, startPos.y, offsetX - startPos.x, offsetY - startPos.y);
+        octx.beginPath();
+        octx.rect(startPos.x, startPos.y, offsetX - startPos.x, offsetY - startPos.y);
+        octx.stroke();
       } else if (tool === "circle") {
         const radius = Math.sqrt(Math.pow(offsetX - startPos.x, 2) + Math.pow(offsetY - startPos.y, 2));
-        ctx.arc(startPos.x, startPos.y, radius, 0, 2 * Math.PI);
+        octx.beginPath();
+        octx.arc(startPos.x, startPos.y, radius, 0, 2 * Math.PI);
+        octx.stroke();
       } else if (tool === "line") {
-        ctx.moveTo(startPos.x, startPos.y);
-        ctx.lineTo(offsetX, offsetY);
+        octx.beginPath();
+        octx.moveTo(startPos.x, startPos.y);
+        octx.lineTo(offsetX, offsetY);
+        octx.stroke();
       }
-      ctx.stroke();
+      octx.restore();
     }
   };
 
@@ -752,7 +744,19 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     setIsDrawing(false);
 
     if (tool !== "pencil" && tool !== "eraser") {
-      socket?.emit("draw-shape", {
+      // Commit the overlay preview into the main canvas so remote events
+      // are preserved independently and we do not accidentally erase them.
+      const overlay = previewCanvasRef.current;
+      if (overlay) {
+        const main = canvasRef.current;
+        const mctx = main.getContext("2d");
+        mctx.drawImage(overlay, 0, 0);
+        // clear overlay
+        const octx = overlay.getContext("2d");
+        octx.clearRect(0, 0, overlay.width, overlay.height);
+      }
+
+      socket.emit("draw-shape", {
         startX: startPos.x, startY: startPos.y, endX: offsetX, endY: offsetY,
         tool,
         color: currentColor,
@@ -760,7 +764,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
         userName: currentUserName,
       });
     } else {
-      socket?.emit("stop-draw");
+      socket.emit("stop-draw");
     }
 
     pushSnapshot();
@@ -768,7 +772,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
 
   const handleMouseLeave = (event) => {
     stopDrawing(event);
-    socket?.emit("cursor-leave");
+    socket.emit("cursor-leave");
   };
 
   const bgStyles = { plain: "none", ruled: "linear-gradient(#e5e5e5 1px, transparent 1px)", grid: "linear-gradient(#e5e5e5 1px, transparent 1px), linear-gradient(90deg, #e5e5e5 1px, transparent 1px)" };
@@ -798,9 +802,22 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
           }}
         />
 
+        {/* Overlay canvas for previews (shapes/rect/line/circle) */}
+        <canvas
+          ref={previewCanvasRef}
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            pointerEvents: "none",
+            width: "100%",
+            height: "100%",
+          }}
+        />
+
         <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
           {Object.entries(remoteCursors).map(([userId, cursor]) => {
-            if (!cursor || canvasSize.width === 0 || canvasSize.height === 0) return null;
+            if (!canvasSize.width || !canvasSize.height || !cursor) return null;
             const left = cursor.x * canvasSize.width;
             const top = cursor.y * canvasSize.height;
 
