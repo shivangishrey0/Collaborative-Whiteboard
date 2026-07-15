@@ -1,3 +1,6 @@
 node_modules/
 .env
 .env.example
+
+# Personal roadmap notes — not for the public repo
+IMPROVEMENTS.md

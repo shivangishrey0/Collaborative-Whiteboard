@@ -4,6 +4,9 @@ const {
   getUsersInRoom,
   getRoomUserCount,
 } = require("./roomPresence");
+const drawingBuffer = require("./drawingBuffer");
+
+const MAX_DRAWING_ACTIONS = 250;
 
 const createCursorColor = () => `hsl(${Math.floor(Math.random() * 360)}, 75%, 45%)`;
 
@@ -34,10 +37,6 @@ const emitStickyNotesState = (io, roomId, stickyNotes = []) => {
   io.to(roomId).emit("sticky-notes-state", stickyNotes);
 };
 
-const emitDrawingActionsState = (io, roomId, drawingActions = []) => {
-  io.to(roomId).emit("drawing-actions-state", drawingActions);
-};
-
 const syncStickyNotesToRoom = async (Room, roomId, updater) => {
   const room = await Room.findOne({ roomId }).select("stickyNotes");
   if (!room) return null;
@@ -48,18 +47,24 @@ const syncStickyNotesToRoom = async (Room, roomId, updater) => {
   return nextStickyNotes;
 };
 
-const syncDrawingActionsToRoom = async (Room, roomId, action) => {
-  const room = await Room.findOne({ roomId }).select("drawingActions");
-  if (!room) return null;
-
-  const existingActions = Array.isArray(room.drawingActions) ? room.drawingActions : [];
-  const nextActions = [...existingActions, action].slice(-250);
-  room.drawingActions = nextActions;
-  await room.save();
-  return nextActions;
-};
-
 const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
+  // Persists a batch of buffered drawing actions in a single atomic update
+  // instead of one read-modify-write per mouse event (see drawingBuffer.js).
+  const flushDrawingActionsForRoom = async (roomId, actions) => {
+    await Room.updateOne(
+      { roomId },
+      {
+        $push: {
+          drawingActions: {
+            $each: actions,
+            $slice: -MAX_DRAWING_ACTIONS,
+          },
+        },
+        $set: { lastActiveAt: new Date() },
+      }
+    );
+  };
+
   io.on("connection", async (socket) => {
     try {
       const roomId = socket.handshake.auth?.roomId;
@@ -124,15 +129,13 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           socketId: socket.id,
         });
 
-        syncDrawingActionsToRoom(Room, roomId, {
+        drawingBuffer.addAction(roomId, {
           id: `${socket.id}-${Date.now()}-start`,
           type: "start-draw",
           userId: socket.id,
           userName: socket.data.userName,
           payload: { ...payload },
-        })
-          .then((nextActions) => emitDrawingActionsState(io, roomId, nextActions || []))
-          .catch((error) => console.error("Failed to persist start-draw action:", error.message));
+        }, flushDrawingActionsForRoom);
       });
 
       socket.on("drawing", (payload) => {
@@ -142,15 +145,13 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           socketId: socket.id,
         });
 
-        syncDrawingActionsToRoom(Room, roomId, {
+        drawingBuffer.addAction(roomId, {
           id: `${socket.id}-${Date.now()}-draw`,
           type: "drawing",
           userId: socket.id,
           userName: socket.data.userName,
           payload: { ...payload },
-        })
-          .then((nextActions) => emitDrawingActionsState(io, roomId, nextActions || []))
-          .catch((error) => console.error("Failed to persist drawing action:", error.message));
+        }, flushDrawingActionsForRoom);
       });
 
       socket.on("stop-draw", () => {
@@ -159,22 +160,22 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           socketId: socket.id,
         });
 
-        syncDrawingActionsToRoom(Room, roomId, {
+        drawingBuffer.addAction(roomId, {
           id: `${socket.id}-${Date.now()}-stop`,
           type: "stop-draw",
           userId: socket.id,
           userName: socket.data.userName,
           payload: {},
-        })
-          .then((nextActions) => emitDrawingActionsState(io, roomId, nextActions || []))
-          .catch((error) => console.error("Failed to persist stop-draw action:", error.message));
+        }, flushDrawingActionsForRoom);
       });
 
       socket.on("clear", async () => {
         io.to(roomId).emit("clear");
+        // Drop any buffered-but-unflushed actions so a stray flush can't
+        // resurrect pre-clear drawing history after the reset below.
+        drawingBuffer.removeRoom(roomId);
         await Room.updateOne({ roomId }, { $set: { lastSnapshot: "", stickyNotes: [], drawingActions: [], lastActiveAt: new Date() } });
         emitStickyNotesState(io, roomId, []);
-        emitDrawingActionsState(io, roomId, []);
       });
 
       socket.on("draw-shape", (payload) => {
@@ -184,15 +185,13 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           socketId: socket.id,
         });
 
-        syncDrawingActionsToRoom(Room, roomId, {
+        drawingBuffer.addAction(roomId, {
           id: `${socket.id}-${Date.now()}-${payload?.tool || "shape"}`,
           type: "draw-shape",
           userId: socket.id,
           userName: socket.data.userName,
           payload: { ...payload },
-        })
-          .then((nextActions) => emitDrawingActionsState(io, roomId, nextActions || []))
-          .catch((error) => console.error("Failed to persist draw-shape action:", error.message));
+        }, flushDrawingActionsForRoom);
       });
 
       socket.on("sticky-note-create", (payload) => {
@@ -331,6 +330,14 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
         try {
           const remainingUsers = await updateRoomUserStats(Room, roomId);
           io.to(roomId).emit("user-count", remainingUsers);
+
+          if (remainingUsers === 0) {
+            // No one left to see further broadcasts — flush whatever's
+            // buffered now instead of waiting for the next timer tick,
+            // then drop the buffer so it doesn't sit in memory forever.
+            await drawingBuffer.flushRoom(roomId, flushDrawingActionsForRoom);
+            drawingBuffer.removeRoom(roomId);
+          }
         } catch (updateError) {
           console.error("Failed to update room user count:", updateError.message);
         }
