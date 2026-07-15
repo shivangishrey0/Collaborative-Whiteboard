@@ -4,6 +4,36 @@ import Board from "./components/Board";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
 console.log("BACKEND URL:", BACKEND_URL);
+const ACTIVE_SESSION_KEY = "whiteboard_active_session";
+
+const getStoredActiveSession = () => {
+  try {
+    const raw = localStorage.getItem(ACTIVE_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.roomId || !parsed?.userName) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const saveActiveSession = (roomId, userName) => {
+  localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify({ roomId, userName }));
+};
+
+const clearActiveSession = () => {
+  localStorage.removeItem(ACTIVE_SESSION_KEY);
+};
+
+const fetchRoomInfo = async (roomId) => {
+  const response = await fetch(`${BACKEND_URL}/api/rooms/${roomId}`);
+  if (!response.ok) {
+    throw new Error("Room not found. Check room link/ID.");
+  }
+  return response.json();
+};
+
 function App() {
   const boardRef = useRef(null);
   const imageInputRef = useRef(null);
@@ -54,8 +84,40 @@ function App() {
     const roomFromUrl = params.get("room");
     if (roomFromUrl) {
       setRoomInput(roomFromUrl);
-      setStatus("Enter your name and click Join Room (or allow guest join)");
     }
+
+    const storedSession = getStoredActiveSession();
+    // Only auto-rejoin when the stored session matches this browser's own
+    // prior visit (no room in the URL — a bare refresh/reopen — or the URL
+    // room matches the stored one). A link shared by someone else for a
+    // different room should never silently reuse a stale session.
+    const canAutoRejoin = storedSession && (!roomFromUrl || roomFromUrl === storedSession.roomId);
+
+    if (!canAutoRejoin) {
+      if (roomFromUrl) {
+        setStatus("Enter your name and click Join Room (or allow guest join)");
+      }
+      return;
+    }
+
+    const targetRoomId = storedSession.roomId;
+    setIsRoomLoading(true);
+    setStatus(`Rejoining room ${targetRoomId}...`);
+
+    fetchRoomInfo(targetRoomId)
+      .then((data) => {
+        setNameInput(storedSession.userName);
+        setRoomInput(targetRoomId);
+        setRoomId(targetRoomId);
+        setJoinedUserName(storedSession.userName);
+        setRoomExpiresAt(data.expiresAt || "");
+        window.history.replaceState({}, "", `${window.location.origin}/?room=${targetRoomId}`);
+      })
+      .catch(() => {
+        clearActiveSession();
+        setStatus(roomFromUrl ? "Enter your name and click Join Room (or allow guest join)" : "Create or join a room to start");
+      })
+      .finally(() => setIsRoomLoading(false));
   }, []);
 
   const resolveSessionUserName = () => {
@@ -84,6 +146,9 @@ function App() {
       setStatus(`Room error: ${message}`);
       setUserCount(0);
       setActiveUsers([]);
+      // The room this session pointed at is gone (not found/expired) —
+      // don't keep trying to auto-rejoin it on the next refresh.
+      clearActiveSession();
     };
     const onActiveUsers = (users) => {
       if (!Array.isArray(users)) return;
@@ -139,6 +204,7 @@ function App() {
       setRoomInput(data.roomId);
       setRoomLink(data.roomLink);
       setRoomExpiresAt(data.expiresAt || "");
+      saveActiveSession(data.roomId, sessionName);
 
       const nextUrl = `${window.location.origin}/?room=${data.roomId}`;
       window.history.replaceState({}, "", nextUrl);
@@ -161,21 +227,19 @@ function App() {
       return;
     }
 
+    const targetRoomId = roomInput.trim();
+
     try {
       setIsRoomLoading(true);
-      const response = await fetch(`${BACKEND_URL}/api/rooms/${roomInput.trim()}`);
-      if (!response.ok) {
-        throw new Error("Room not found. Check room link/ID.");
-      }
+      const data = await fetchRoomInfo(targetRoomId);
 
-      const data = await response.json();
-
-      setRoomId(roomInput.trim());
-  setJoinedUserName(sessionName);
+      setRoomId(targetRoomId);
+      setJoinedUserName(sessionName);
       setRoomExpiresAt(data.expiresAt || "");
-      const nextUrl = `${window.location.origin}/?room=${roomInput.trim()}`;
+      saveActiveSession(targetRoomId, sessionName);
+      const nextUrl = `${window.location.origin}/?room=${targetRoomId}`;
       window.history.replaceState({}, "", nextUrl);
-      setStatus(`Joining room ${roomInput.trim()}...`);
+      setStatus(`Joining room ${targetRoomId}...`);
     } catch (error) {
       setStatus(error.message);
     } finally {
