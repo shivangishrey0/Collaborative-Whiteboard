@@ -113,6 +113,18 @@ Frontend env vars (`frontend/.env`):
 
 Open the frontend URL (default `http://localhost:5173`), create a room, then open a **second browser tab** with the same room link and draw — both tabs should update instantly. This two-tab test is also the quickest way to manually verify real-time sync after making changes to drawing or socket logic.
 
+### Or: run everything with Docker Compose
+
+No local Node/MongoDB install needed — just Docker.
+
+```bash
+docker compose up --build
+```
+
+This builds and starts three containers: `mongo` (MongoDB 7, with a named volume so data survives restarts), `backend` (Express + Socket.io), and `frontend` (a production Vite build served by nginx). Once it's up, open `http://localhost:5173`.
+
+Compose sets the backend's `MONGO_URI`/`FRONTEND_URL` and the frontend's `VITE_BACKEND_URL` directly in `docker-compose.yml` — you don't need a `.env` file for this path (it's an alternative to the manual setup above, not an addition to it). Stop everything with `docker compose down` (add `-v` if you also want to wipe the Mongo volume).
+
 ## Known limitations / honest trade-offs
 
 This project is under active improvement — some intentional trade-offs and current gaps worth knowing about:
