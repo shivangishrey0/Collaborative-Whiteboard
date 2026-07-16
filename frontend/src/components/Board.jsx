@@ -280,7 +280,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
       if (shapeTool === "text") {
         ctx.font = `${shapeSize * 3}px Arial`;
         ctx.fillStyle = shapeColor;
-        ctx.textBaseline = "top"; // Top align kiya hai taaki position perfect rahe
+        ctx.textBaseline = "top"; // Top-align so text position stays accurate
         ctx.fillText(text, startX, startY);
       } else if (shapeTool === "sticky") {
         drawStickyNote(ctx, startX, startY, text, 220, shapeSize * 2 || 16);
@@ -522,7 +522,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
     const ctx = canvas.getContext("2d");
     const rect = canvas.getBoundingClientRect();
 
-    // Box ki nayi position ke hisaab se Canvas ki Asli X, Y calculate karna
+    // Recalculate canvas X/Y from the input box's dragged position
     const finalCanvasX = currentFloatingInput.clientX - rect.left + 5; 
     const finalCanvasY = currentFloatingInput.clientY - rect.top + 20;
 
@@ -916,7 +916,7 @@ const Board = forwardRef(({ socket, color, brushSize, tool, bgType, pendingImage
             boxShadow: "0 4px 10px rgba(0,0,0,0.2)"
           }}
         >
-          {/* 🖐️ DRAG HANDLE (Isko pakad kar move karna hai) */}
+          {/* Drag handle */}
           <div
             onMouseDown={handleTextDragStart}
             style={{

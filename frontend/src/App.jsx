@@ -4,7 +4,6 @@ import Board from "./components/Board";
 import { getStoredActiveSession, saveActiveSession, clearActiveSession, fetchRoomInfo } from "./utils/session";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
-console.log("BACKEND URL:", BACKEND_URL);
 
 function App() {
   const boardRef = useRef(null);
@@ -326,15 +325,6 @@ function App() {
             ⬇️ Download Board
           </button>
 
-          <button
-            onClick={downloadBoard}
-            disabled={!socket}
-            title="Quick download"
-            style={{ padding: "8px 10px", backgroundColor: "#157347", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", minWidth: "40px" }}
-          >
-            ⬇
-          </button>
-
           <input
             ref={imageInputRef}
             type="file"
@@ -401,7 +391,7 @@ function App() {
             </select>
           </div>
 
-          {/* NAYA TOOL SELECTOR */}
+          {/* Tool selector */}
           <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
             <label htmlFor="tool">Tool:</label>
              <select 
@@ -417,12 +407,12 @@ function App() {
             <option value="line">📏 Straight Line</option>
             <option value="sticky">🗒️ Sticky Note</option>
             <option value="image">🖼️ Image</option>
-            <option value="text">🔠 Text</option> {/* Naya option */}
+            <option value="text">🔠 Text</option>
         </select>
           </div>
          
 
-          {/* Color Picker (Agar Eraser select hai toh disable ho jayega) */}
+          {/* Color picker — disabled when eraser is selected */}
           <div style={{ display: "flex", alignItems: "center", gap: "5px", opacity: tool === "eraser" ? 0.5 : 1 }}>
             <label htmlFor="colorPicker">Color:</label>
             <input
