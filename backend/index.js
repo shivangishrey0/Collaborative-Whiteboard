@@ -7,6 +7,8 @@ const mongoose = require("mongoose");
 const crypto = require("crypto");
 const Room = require("./models/Room");
 const { registerSocketHandlers } = require("./socket/registerSocketHandlers");
+const { roomIdParamSchema } = require("./validation/schemas");
+const { roomCreateLimiter, roomLookupLimiter } = require("./middleware/rateLimiters");
 
 dotenv.config();
 
@@ -14,6 +16,10 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 const FRONTEND_URL = process.env.FRONTEND_URL;
+
+// Render (and most PaaS hosts) put the app behind a reverse proxy — without
+// this, express-rate-limit can't see the real client IP (or refuses to start).
+app.set("trust proxy", 1);
 
 const allowedOrigins = [FRONTEND_URL].filter(Boolean);
 const localOriginPatterns = [/^http:\/\/localhost:\d+$/i, /^http:\/\/127\.0\.0\.1:\d+$/i];
@@ -64,7 +70,7 @@ app.get("/health", (req, res) => {
   res.json({ ok: true, service: "whiteboard-backend" });
 });
 
-app.post("/api/rooms", async (req, res) => {
+app.post("/api/rooms", roomCreateLimiter, async (req, res) => {
   try {
     let roomId = createRoomId();
 
@@ -89,8 +95,12 @@ app.post("/api/rooms", async (req, res) => {
   }
 });
 
-app.get("/api/rooms/:roomId", async (req, res) => {
+app.get("/api/rooms/:roomId", roomLookupLimiter, async (req, res) => {
   try {
+    if (!roomIdParamSchema.safeParse(req.params.roomId).success) {
+      return res.status(400).json({ message: "Invalid room ID format" });
+    }
+
     const room = await Room.findOne({ roomId: req.params.roomId }).lean();
 
     if (!room) {

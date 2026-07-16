@@ -5,6 +5,17 @@ const {
   getRoomUserCount,
 } = require("./roomPresence");
 const drawingBuffer = require("./drawingBuffer");
+const {
+  socketAuthSchema,
+  drawEventSchema,
+  drawShapeSchema,
+  stickyCreateSchema,
+  stickyUpdateSchema,
+  stickyDeleteSchema,
+  saveSnapshotSchema,
+  cursorMoveSchema,
+  validateOrNull,
+} = require("../validation/schemas");
 
 const MAX_DRAWING_ACTIONS = 250;
 
@@ -67,14 +78,16 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
 
   io.on("connection", async (socket) => {
     try {
-      const roomId = socket.handshake.auth?.roomId;
+      const validatedAuth = validateOrNull(socketAuthSchema, socket.handshake.auth);
       const userName = sanitizeUserName(socket.handshake.auth?.userName);
 
-      if (!roomId) {
-        socket.emit("room-error", "Room ID missing");
+      if (!validatedAuth) {
+        socket.emit("room-error", "Room ID missing or invalid");
         socket.disconnect(true);
         return;
       }
+
+      const { roomId } = validatedAuth;
 
       const room = await Room.findOne({ roomId });
       if (!room) {
@@ -122,9 +135,12 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
       io.to(roomId).emit("user-count", currentUsers);
 
       socket.on("start-draw", (payload) => {
+        const validated = validateOrNull(drawEventSchema, payload);
+        if (!validated) return;
+
         // Forward drawing packets only to room peers, never back to sender.
         socket.to(roomId).emit("start-draw", {
-          ...payload,
+          ...validated,
           userName: socket.data.userName,
           socketId: socket.id,
         });
@@ -134,13 +150,16 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           type: "start-draw",
           userId: socket.id,
           userName: socket.data.userName,
-          payload: { ...payload },
+          payload: validated,
         }, flushDrawingActionsForRoom);
       });
 
       socket.on("drawing", (payload) => {
+        const validated = validateOrNull(drawEventSchema, payload);
+        if (!validated) return;
+
         socket.to(roomId).emit("drawing", {
-          ...payload,
+          ...validated,
           userName: socket.data.userName,
           socketId: socket.id,
         });
@@ -150,7 +169,7 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           type: "drawing",
           userId: socket.id,
           userName: socket.data.userName,
-          payload: { ...payload },
+          payload: validated,
         }, flushDrawingActionsForRoom);
       });
 
@@ -179,33 +198,27 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
       });
 
       socket.on("draw-shape", (payload) => {
+        const validated = validateOrNull(drawShapeSchema, payload);
+        if (!validated) return;
+
         socket.to(roomId).emit("draw-shape", {
-          ...payload,
+          ...validated,
           userName: socket.data.userName,
           socketId: socket.id,
         });
 
         drawingBuffer.addAction(roomId, {
-          id: `${socket.id}-${Date.now()}-${payload?.tool || "shape"}`,
+          id: `${socket.id}-${Date.now()}-${validated.tool || "shape"}`,
           type: "draw-shape",
           userId: socket.id,
           userName: socket.data.userName,
-          payload: { ...payload },
+          payload: validated,
         }, flushDrawingActionsForRoom);
       });
 
       socket.on("sticky-note-create", (payload) => {
-        if (!payload || typeof payload !== "object") return;
-        const notePayload = {
-          id: payload.id,
-          x: payload.x,
-          y: payload.y,
-          xRatio: payload.xRatio,
-          yRatio: payload.yRatio,
-          text: payload.text,
-        };
-
-        if (!notePayload.id) return;
+        const notePayload = validateOrNull(stickyCreateSchema, payload);
+        if (!notePayload) return;
 
         syncStickyNotesToRoom(Room, roomId, (stickyNotes) => {
           const withoutDuplicate = stickyNotes.filter((item) => item.id !== notePayload.id);
@@ -232,15 +245,8 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
       });
 
       socket.on("sticky-note-update", (payload) => {
-        if (!payload || typeof payload !== "object") return;
-        if (!payload.id) return;
-
-        const notePayload = { id: payload.id };
-        if (typeof payload.x === "number") notePayload.x = payload.x;
-        if (typeof payload.y === "number") notePayload.y = payload.y;
-        if (typeof payload.xRatio === "number") notePayload.xRatio = payload.xRatio;
-        if (typeof payload.yRatio === "number") notePayload.yRatio = payload.yRatio;
-        if (typeof payload.text === "string") notePayload.text = payload.text;
+        const notePayload = validateOrNull(stickyUpdateSchema, payload);
+        if (!notePayload) return;
 
         syncStickyNotesToRoom(Room, roomId, (stickyNotes) =>
           stickyNotes.map((item) =>
@@ -266,8 +272,11 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           });
       });
 
-      socket.on("sticky-note-delete", ({ id }) => {
-        if (!id) return;
+      socket.on("sticky-note-delete", (payload) => {
+        const validated = validateOrNull(stickyDeleteSchema, payload);
+        if (!validated) return;
+        const { id } = validated;
+
         syncStickyNotesToRoom(Room, roomId, (stickyNotes) => stickyNotes.filter((item) => item.id !== id))
           .then(() => {
             socket.to(roomId).emit("sticky-note-delete", {
@@ -281,20 +290,25 @@ const registerSocketHandlers = ({ io, Room, isRoomExpired }) => {
           });
       });
 
-      socket.on("save-snapshot", async ({ snapshot }) => {
-        if (!snapshot || typeof snapshot !== "string") return;
+      socket.on("save-snapshot", async (payload) => {
+        const validated = validateOrNull(saveSnapshotSchema, payload);
+        if (!validated) return;
+
         await Room.updateOne(
           { roomId },
-          { $set: { lastSnapshot: snapshot, lastActiveAt: new Date() } }
+          { $set: { lastSnapshot: validated.snapshot, lastActiveAt: new Date() } }
         );
       });
 
-      socket.on("cursor-move", ({ x, y, xRatio, yRatio }) => {
+      socket.on("cursor-move", (payload) => {
+        const validated = validateOrNull(cursorMoveSchema, payload);
+        if (!validated) return;
+
+        const { x, y, xRatio, yRatio } = validated;
         const resolvedX = typeof x === "number" ? x : xRatio;
         const resolvedY = typeof y === "number" ? y : yRatio;
 
         if (typeof resolvedX !== "number" || typeof resolvedY !== "number") return;
-        if (resolvedX < 0 || resolvedX > 1 || resolvedY < 0 || resolvedY > 1) return;
 
         socket.to(roomId).emit("cursor-move", {
           userId: socket.id,
