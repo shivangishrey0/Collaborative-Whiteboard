@@ -1,27 +1,5 @@
 import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
-
-// Helper: wrap long text into lines for sticky notes and text shapes
-const wrapText = (ctx, text, maxWidth) => {
-  const words = text.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return [""];
-
-  const lines = [];
-  let currentLine = words[0];
-
-  for (let i = 1; i < words.length; i += 1) {
-    const testLine = `${currentLine} ${words[i]}`;
-    const metrics = ctx.measureText(testLine);
-    if (metrics.width > maxWidth) {
-      lines.push(currentLine);
-      currentLine = words[i];
-    } else {
-      currentLine = testLine;
-    }
-  }
-
-  lines.push(currentLine);
-  return lines;
-};
+import { wrapText } from "../utils/wrapText";
 
 // Helper: draw a sticky note onto a CanvasRenderingContext2D
 const drawStickyNote = (ctx, x, y, text, noteWidth = 220, fontSize = 16) => {

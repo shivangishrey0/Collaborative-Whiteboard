@@ -140,4 +140,10 @@ const startServer = async () => {
   }
 };
 
-startServer();
+// Only auto-start when run directly (`node index.js` / `nodemon index.js`).
+// Tests import `app` and manage their own DB connection + port instead.
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { app };

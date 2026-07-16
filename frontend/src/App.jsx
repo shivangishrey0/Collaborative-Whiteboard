@@ -1,38 +1,10 @@
 import { useEffect, useState, useRef } from "react";
 import { io } from "socket.io-client";
 import Board from "./components/Board";
+import { getStoredActiveSession, saveActiveSession, clearActiveSession, fetchRoomInfo } from "./utils/session";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
 console.log("BACKEND URL:", BACKEND_URL);
-const ACTIVE_SESSION_KEY = "whiteboard_active_session";
-
-const getStoredActiveSession = () => {
-  try {
-    const raw = localStorage.getItem(ACTIVE_SESSION_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed?.roomId || !parsed?.userName) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-};
-
-const saveActiveSession = (roomId, userName) => {
-  localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify({ roomId, userName }));
-};
-
-const clearActiveSession = () => {
-  localStorage.removeItem(ACTIVE_SESSION_KEY);
-};
-
-const fetchRoomInfo = async (roomId) => {
-  const response = await fetch(`${BACKEND_URL}/api/rooms/${roomId}`);
-  if (!response.ok) {
-    throw new Error("Room not found. Check room link/ID.");
-  }
-  return response.json();
-};
 
 function App() {
   const boardRef = useRef(null);
@@ -104,7 +76,7 @@ function App() {
     setIsRoomLoading(true);
     setStatus(`Rejoining room ${targetRoomId}...`);
 
-    fetchRoomInfo(targetRoomId)
+    fetchRoomInfo(BACKEND_URL, targetRoomId)
       .then((data) => {
         setNameInput(storedSession.userName);
         setRoomInput(targetRoomId);
@@ -231,7 +203,7 @@ function App() {
 
     try {
       setIsRoomLoading(true);
-      const data = await fetchRoomInfo(targetRoomId);
+      const data = await fetchRoomInfo(BACKEND_URL, targetRoomId);
 
       setRoomId(targetRoomId);
       setJoinedUserName(sessionName);
